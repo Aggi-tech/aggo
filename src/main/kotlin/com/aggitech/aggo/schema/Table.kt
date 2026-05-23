@@ -24,6 +24,18 @@ abstract class Table<E>(val name: String) {
     /**
      * Register a column. Returns the descriptor so it can be assigned to a `val`
      * inside the schema object.
+     *
+     * Pass [check] to attach a PostgreSQL CHECK constraint to this column.
+     * The lambda receives the column name and must return a valid SQL boolean
+     * expression. Use [Checks] helpers or a raw lambda:
+     *
+     * ```kotlin
+     * val email = column("email", EmailCodec, check = Checks.email()) { it.email }
+     * val id    = column("id",    IdCodec,    check = Checks.tsid())  { it.id }
+     * val name  = column("name",  StringCodec, check = { col -> "char_length(\"$col\") <= 100" }) { it.name }
+     * ```
+     *
+     * Retrieve all constraint SQL via [checkConstraintClauses] or [addCheckConstraintsSql].
      */
     protected fun <V> column(
         name: String,
@@ -31,6 +43,7 @@ abstract class Table<E>(val name: String) {
         isPrimaryKey: Boolean = false,
         isGenerated: Boolean = false,
         isNullable: Boolean = false,
+        check: ((columnName: String) -> String)? = null,
         getter: (E) -> V?,
     ): Column<E, V> {
         val col = Column(
@@ -41,10 +54,37 @@ abstract class Table<E>(val name: String) {
             isPrimaryKey = isPrimaryKey,
             isGenerated = isGenerated,
             isNullable = isNullable,
+            checkExpression = check,
         )
         mutableColumns += col
         return col
     }
+
+    /**
+     * Returns inline `CONSTRAINT … CHECK (…)` clauses for every column that
+     * declared a [check] expression. These can be embedded directly inside a
+     * `CREATE TABLE` block or used with [addCheckConstraintsSql].
+     */
+    fun checkConstraintClauses(): List<String> =
+        columns.mapNotNull { col ->
+            col.checkExpression?.let { expr ->
+                "CONSTRAINT chk_${name}_${col.name} CHECK (${expr(col.name)})"
+            }
+        }
+
+    /**
+     * Returns ready-to-run `ALTER TABLE … ADD CONSTRAINT …` statements for all
+     * columns with a [check] expression. Paste these into a Liquibase migration
+     * when adding constraints to an existing table.
+     *
+     * Example output:
+     * ```sql
+     * ALTER TABLE "payers" ADD CONSTRAINT chk_payers_email CHECK ("email" ~ '^[^@\s]+@[^@\s]+\.[^@\s]+$');
+     * ALTER TABLE "payers" ADD CONSTRAINT chk_payers_id CHECK (char_length("id") = 13);
+     * ```
+     */
+    fun addCheckConstraintsSql(): List<String> =
+        checkConstraintClauses().map { clause -> "ALTER TABLE \"$name\" ADD $clause;" }
 
     /**
      * Build an entity from a result Row. Implementations should call

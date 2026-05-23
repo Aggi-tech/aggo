@@ -3,8 +3,11 @@ package com.aggitech.aggo
 import com.aggitech.aggo.dsl.delete
 import com.aggitech.aggo.dsl.eq
 import com.aggitech.aggo.dsl.insert
+import com.aggitech.aggo.dsl.leftJoin
+import com.aggitech.aggo.dsl.orderBy
 import com.aggitech.aggo.dsl.select
 import com.aggitech.aggo.dsl.update
+import com.aggitech.aggo.dsl.where
 import com.aggitech.aggo.runtime.Aggo
 import com.aggitech.aggo.runtime.AggoPool
 import com.aggitech.aggo.runtime.PoolConfig
@@ -74,6 +77,15 @@ class IntegrationTest : StringSpec({
                     )
                     """.trimIndent()
                 )
+                session.executeRaw(
+                    """
+                    CREATE TABLE pets (
+                        id          SERIAL PRIMARY KEY,
+                        owner_id    INTEGER NOT NULL REFERENCES people(id),
+                        name        TEXT NOT NULL
+                    )
+                    """.trimIndent()
+                )
             }
         }
     }
@@ -102,6 +114,52 @@ class IntegrationTest : StringSpec({
         all.map { it.name } shouldBe listOf("A", "B", "C")
 
         aggo.read { it.delete(delete(People)) }
+    }
+
+    "LEFT JOIN maps nested objects and keeps right null when there is no match".config(enabledIf = { dockerAvailable }) {
+        val annaId = aggo.tx { session ->
+            session.insertReturning(
+                insert(People) {
+                    People.email setTo Email("anna@pets")
+                    People.fullName setTo "Anna"
+                    People.active setTo true
+                },
+                People.id,
+            )!!
+        }
+        val bobId = aggo.tx { session ->
+            session.insertReturning(
+                insert(People) {
+                    People.email setTo Email("bob@pets")
+                    People.fullName setTo "Bob"
+                    People.active setTo true
+                },
+                People.id,
+            )!!
+        }
+
+        aggo.tx { session ->
+            session.insert(insert(Pets) {
+                Pets.ownerId setTo annaId
+                Pets.petName setTo "Nina"
+            })
+        }
+
+        val rows = aggo.read { session ->
+            session.fetchAllJoined(
+                People.leftJoin(Pets) { People.id eq Pets.ownerId }
+                    .where { People.active eq true }
+                    .orderBy { People.id.asc() }
+            )
+        }
+
+        rows.map { it.left.name } shouldBe listOf("Anna", "Bob")
+        rows[0].right?.name shouldBe "Nina"
+        rows[1].right shouldBe null
+
+        aggo.read { it.delete(delete(Pets)) }
+        aggo.read { it.delete(delete(People) { where { People.id eq annaId } }) }
+        aggo.read { it.delete(delete(People) { where { People.id eq bobId } }) }
     }
 
     "tx { ... } rolls back on exception (C-1, C-2)".config(enabledIf = { dockerAvailable }) {

@@ -19,7 +19,13 @@ private fun <E, V> cmp(c: Column<E, V>, op: ComparisonOp, value: V?): Predicate 
     Predicate.Cmp(col(c), op, lit(value, c.codec))
 
 infix fun <E, V> Column<E, V>.eq(value: V?): Predicate = cmp(this, ComparisonOp.EQ, value)
+infix fun <L, R, V> Column<L, V>.eq(other: Column<R, V>): Predicate =
+    Predicate.Cmp(col(this), ComparisonOp.EQ, col(other))
+
 infix fun <E, V> Column<E, V>.ne(value: V?): Predicate = cmp(this, ComparisonOp.NE, value)
+infix fun <L, R, V> Column<L, V>.ne(other: Column<R, V>): Predicate =
+    Predicate.Cmp(col(this), ComparisonOp.NE, col(other))
+
 infix fun <E, V : Comparable<V>> Column<E, V>.gt(value: V): Predicate = cmp(this, ComparisonOp.GT, value)
 infix fun <E, V : Comparable<V>> Column<E, V>.gte(value: V): Predicate = cmp(this, ComparisonOp.GTE, value)
 infix fun <E, V : Comparable<V>> Column<E, V>.lt(value: V): Predicate = cmp(this, ComparisonOp.LT, value)

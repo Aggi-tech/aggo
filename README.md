@@ -94,6 +94,33 @@ aggo.tx { session ->
 }
 ```
 
+### 4. Fetch nested objects with LEFT JOIN
+
+```kotlin
+import com.aggitech.aggo.dsl.*
+import com.aggitech.aggo.query.JoinedRow
+
+val q = UsersTable.leftJoin(MagicPinChallengesTable) {
+    UsersTable.id eq MagicPinChallengesTable.userId
+}
+    .where { UsersTable.active eq true }
+    .orderBy { UsersTable.id.asc() }
+    .limit(50)
+
+val rows: List<JoinedRow<User, MagicPinChallenge>> =
+    aggo.read { session -> session.fetchAllJoined(q) }
+
+rows.forEach { row ->
+    val user: User = row.left
+    val challenge: MagicPinChallenge? = row.right
+}
+```
+
+`LEFT JOIN` results are nested as `JoinedRow(left, right)`. `right` is `null`
+when PostgreSQL returns no matching right-side row. Aggo reads joined rows by
+position internally, so duplicate column names like `id` remain safe without
+aliases or reflection.
+
 ## Quarkus integration
 
 The lib does not depend on Quarkus. Each microservice declares its own producer (≈ 15 lines):

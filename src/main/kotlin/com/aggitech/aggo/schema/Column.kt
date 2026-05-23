@@ -9,6 +9,8 @@ import io.r2dbc.spi.Row
  * - [codec] knows how to encode/decode against R2DBC.
  * - [isPrimaryKey], [isGenerated], [isNullable] are explicit flags the user
  *   declares (the framework never guesses via annotation scanning).
+ * - [checkExpression] is an optional lambda that receives the column name and
+ *   returns a PostgreSQL CHECK expression. Use [Checks] helpers or a raw lambda.
  */
 class Column<E, V>(
     val table: Table<E>,
@@ -18,6 +20,7 @@ class Column<E, V>(
     val isPrimaryKey: Boolean = false,
     val isGenerated: Boolean = false,
     val isNullable: Boolean = false,
+    val checkExpression: ((columnName: String) -> String)? = null,
 ) {
     /** Read this column out of an R2DBC [Row]. Required nulls are caller's problem. */
     fun read(row: Row): V? = codec.read(row, name)

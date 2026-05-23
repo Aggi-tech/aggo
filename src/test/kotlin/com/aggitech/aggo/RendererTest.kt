@@ -9,12 +9,17 @@ import com.aggitech.aggo.dsl.gte
 import com.aggitech.aggo.dsl.inList
 import com.aggitech.aggo.dsl.insert
 import com.aggitech.aggo.dsl.isNotNull
+import com.aggitech.aggo.dsl.leftJoin
+import com.aggitech.aggo.dsl.limit
 import com.aggitech.aggo.dsl.like
+import com.aggitech.aggo.dsl.orderBy
 import com.aggitech.aggo.dsl.or
 import com.aggitech.aggo.dsl.select
 import com.aggitech.aggo.dsl.update
+import com.aggitech.aggo.dsl.where
 import com.aggitech.aggo.render.renderDelete
 import com.aggitech.aggo.render.renderInsert
+import com.aggitech.aggo.render.renderJoinSelect
 import com.aggitech.aggo.render.renderSelect
 import com.aggitech.aggo.render.renderUpdate
 import io.kotest.core.spec.style.StringSpec
@@ -96,6 +101,27 @@ class RendererTest : StringSpec({
         } catch (e: IllegalArgumentException) {
             // expected
         }
+    }
+
+    "leftJoin renders qualified table columns in positional mapping order" {
+        val q = People.leftJoin(Pets) { People.id eq Pets.ownerId }
+            .where { People.active eq true }
+            .orderBy {
+                Pets.petName.asc()
+                People.id.desc()
+            }
+            .limit(25)
+
+        val r = renderJoinSelect(q, PostgresDialect)
+
+        r.sql shouldBe
+            """SELECT "people"."id", "people"."email", "people"."name", "people"."active", "people"."created_at", """ +
+            """"pets"."id", "pets"."owner_id", "pets"."name" """ +
+            """FROM "people" LEFT JOIN "pets" ON "people"."id" = "pets"."owner_id" """ +
+            """WHERE "people"."active" = ${'$'}1 """ +
+            """ORDER BY "pets"."name" ASC, "people"."id" DESC """ +
+            """LIMIT 25"""
+        r.params.map { it.value } shouldBe listOf(true)
     }
 
     "insert with explicit assignments + ValueClassCodec unwraps inline class" {

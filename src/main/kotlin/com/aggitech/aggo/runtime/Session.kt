@@ -3,11 +3,14 @@ package com.aggitech.aggo.runtime
 import com.aggitech.aggo.dialect.SqlDialect
 import com.aggitech.aggo.query.Delete
 import com.aggitech.aggo.query.Insert
+import com.aggitech.aggo.query.JoinSelect
+import com.aggitech.aggo.query.JoinedRow
 import com.aggitech.aggo.query.Select
 import com.aggitech.aggo.query.Update
 import com.aggitech.aggo.render.RenderedSql
 import com.aggitech.aggo.render.renderDelete
 import com.aggitech.aggo.render.renderInsert
+import com.aggitech.aggo.render.renderJoinSelect
 import com.aggitech.aggo.render.renderSelect
 import com.aggitech.aggo.render.renderUpdate
 import com.aggitech.aggo.schema.Column
@@ -52,6 +55,17 @@ class Session internal constructor(
             val mapped: Publisher<E> = result.map { row, _ -> table.fromRow(row) }
             // Use kotlinx Publisher.collect (no `T : Any` constraint) so E can be
             // anything — including nullable types if the schema chose to.
+            mapped.collect { value -> emit(value) }
+        }
+    }
+
+    suspend fun <L, R> fetchAllJoined(query: JoinSelect<L, R>): List<JoinedRow<L, R>> =
+        streamJoined(query).toList()
+
+    fun <L, R> streamJoined(query: JoinSelect<L, R>): Flow<JoinedRow<L, R>> = flow {
+        val rendered = renderJoinSelect(query, dialect)
+        executeForResults(rendered).asResultFlow().collect { result ->
+            val mapped: Publisher<JoinedRow<L, R>> = result.map { row, _ -> mapJoinedRow(query, row) }
             mapped.collect { value -> emit(value) }
         }
     }
@@ -131,6 +145,27 @@ class Session internal constructor(
 
     @Suppress("unused") // expose connection for advanced raw operations
     fun rawConnection(): Connection = connection
+
+    private fun <L, R> mapJoinedRow(query: JoinSelect<L, R>, row: Row): JoinedRow<L, R> {
+        val leftCount = query.leftTable.columns.size
+        val leftRow = PositionalRow(row, nameToIndex(query.leftTable.columns, offset = 0))
+        val rightRow = PositionalRow(row, nameToIndex(query.rightTable.columns, offset = leftCount))
+        val left = query.leftTable.fromRow(leftRow)
+        val right = if (rightSideIsNull(query, row, leftCount)) null else query.rightTable.fromRow(rightRow)
+        return JoinedRow(left, right)
+    }
+
+    private fun nameToIndex(columns: List<Column<*, *>>, offset: Int): Map<String, Int> =
+        columns.mapIndexed { index, column -> column.name to offset + index }.toMap()
+
+    private fun <L, R> rightSideIsNull(query: JoinSelect<L, R>, row: Row, leftCount: Int): Boolean {
+        val rightColumns = query.rightTable.columns
+        val nullCheckColumns = query.rightTable.primaryKeys.ifEmpty { rightColumns }
+        return nullCheckColumns.all { column ->
+            val index = leftCount + rightColumns.indexOf(column)
+            row.get(index, Any::class.java) == null
+        }
+    }
 }
 
 /**

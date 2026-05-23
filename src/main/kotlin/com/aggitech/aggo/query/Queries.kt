@@ -12,6 +12,23 @@ data class Ordering<E, V>(val column: Column<E, V>, val direction: OrderDir)
 /** A column assignment (e.g. INSERT VALUES or UPDATE SET pair). */
 data class Assignment<E, V>(val column: Column<E, V>, val value: V?, val codec: Codec<V>)
 
+data class JoinOrdering(val column: Column<*, *>, val direction: OrderDir)
+
+enum class JoinType(val sql: String) {
+    LEFT("LEFT JOIN"),
+}
+
+data class JoinClause<R>(
+    val type: JoinType,
+    val table: Table<R>,
+    val on: Predicate,
+)
+
+data class JoinedRow<L, R>(
+    val left: L,
+    val right: R?,
+)
+
 /** Sealed root for all query shapes — lets `when` be exhaustive in renderers. */
 sealed interface Query<E> {
     val table: Table<E>
@@ -30,6 +47,22 @@ data class Select<E>(
     }
 
     companion object { const val MAX_LIMIT = 10_000_000 }
+}
+
+data class JoinSelect<L, R>(
+    val leftTable: Table<L>,
+    val join: JoinClause<R>,
+    val where: Predicate? = null,
+    val orderBy: List<JoinOrdering> = emptyList(),
+    val limit: Int? = null,
+    val offset: Int? = null,
+) {
+    init {
+        if (limit != null) require(limit in 0..Select.MAX_LIMIT) { "limit out of range: $limit" }
+        if (offset != null) require(offset >= 0) { "offset must be >= 0: $offset" }
+    }
+
+    val rightTable: Table<R> get() = join.table
 }
 
 data class Insert<E>(

@@ -38,3 +38,21 @@ object People : Table<Person>("people") {
         createdAt = createdAt.readRequired(row),
     )
 }
+
+data class Pet(
+    val id: Int,
+    val ownerId: Int,
+    val name: String,
+)
+
+object Pets : Table<Pet>("pets") {
+    val id = column("id", IntCodec, isPrimaryKey = true, isGenerated = true) { it.id }
+    val ownerId = column("owner_id", IntCodec) { it.ownerId }
+    val petName = column("name", StringCodec) { it.name }
+
+    override fun fromRow(row: Row): Pet = Pet(
+        id = id.readRequired(row),
+        ownerId = ownerId.readRequired(row),
+        name = petName.readRequired(row),
+    )
+}
