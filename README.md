@@ -152,6 +152,17 @@ mvn deploy                # publish to GitHub Packages (requires GITHUB_TOKEN wi
 mvn deploy -P central     # publish to Maven Central (requires Central + GPG secrets)
 ```
 
+For a local release version override, run:
+
+```bash
+mvn org.codehaus.mojo:versions-maven-plugin:2.18.0:set -DnewVersion=0.3.1 -DgenerateBackupPoms=false
+mvn deploy -P central
+```
+
+The `Publish to GitHub Packages` and `Publish to Maven Central` GitHub Actions
+also accept `release_version` when run manually. Tag pushes still derive the
+version from tags such as `v0.3.1`.
+
 `~/.m2/settings.xml` for publishing:
 
 ```xml

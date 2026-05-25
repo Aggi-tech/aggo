@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'           # trigger on version tags: v0.3.0, v1.0.0, etc.
   workflow_dispatch:   # allow manual trigger from the Actions UI
+    inputs:
+      release_version:
+        description: 'Version to publish to Maven Central, for example 0.3.1'
+        required: true
+        type: string
 
 jobs:
   publish:
@@ -25,6 +30,31 @@ jobs:
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
           # tells setup-java which env var carries the passphrase for the imported key
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      - name: Resolve release version
+        id: release
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.release_version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+
+          if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+){2}(-[A-Za-z0-9._-]+)?$ ]]; then
+            echo "Invalid release version: $VERSION" >&2
+            echo "Use a Maven-compatible release such as 0.3.1 or 1.0.0-rc.1." >&2
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set Maven project version
+        run: >
+          mvn -B org.codehaus.mojo:versions-maven-plugin:2.18.0:set
+          -DnewVersion=${{ steps.release.outputs.version }}
+          -DgenerateBackupPoms=false
+          --no-transfer-progress
 
       - name: Run tests before publishing
         run: mvn -B test -Dtest='!IntegrationTest' --no-transfer-progress
