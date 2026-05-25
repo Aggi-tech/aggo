@@ -31,11 +31,11 @@ object People : Table<Person>("people") {
     val createdAt = column("created_at", InstantCodec, isGenerated = true) { it.createdAt }
 
     override fun fromRow(row: Row): Person = Person(
-        id = id.readRequired(row),
-        email = email.readRequired(row),
-        name = fullName.readRequired(row),
-        active = active.readRequired(row),
-        createdAt = createdAt.readRequired(row),
+        id = id.required(row),
+        email = email.required(row),
+        name = fullName.required(row),
+        active = active.required(row),
+        createdAt = createdAt.required(row),
     )
 }
 
@@ -51,8 +51,8 @@ object Pets : Table<Pet>("pets") {
     val petName = column("name", StringCodec) { it.name }
 
     override fun fromRow(row: Row): Pet = Pet(
-        id = id.readRequired(row),
-        ownerId = ownerId.readRequired(row),
-        name = petName.readRequired(row),
+        id = id.required(row),
+        ownerId = ownerId.required(row),
+        name = petName.required(row),
     )
 }

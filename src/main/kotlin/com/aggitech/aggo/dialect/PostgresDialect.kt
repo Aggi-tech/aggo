@@ -1,6 +1,7 @@
 package com.aggitech.aggo.dialect
 
 import com.aggitech.aggo.schema.Codec
+import com.aggitech.aggo.schema.MigratableCodec
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -30,7 +31,12 @@ object PostgresDialect : MigrationDialect {
      * Postgres R2DBC driver does not accept [java.time.Instant] directly;
      * that driver type maps to `TIMESTAMPTZ`.
      */
-    override fun columnSqlType(codec: Codec<*>): String = when (codec.sqlType) {
+    override fun columnSqlType(codec: Codec<*>): String {
+        if (codec is MigratableCodec<*>) return codec.ddlTypeName
+        return columnSqlTypeByDriverType(codec)
+    }
+
+    private fun columnSqlTypeByDriverType(codec: Codec<*>): String = when (codec.sqlType) {
         String::class.java              -> "TEXT"
         Int::class.javaObjectType       -> "INTEGER"
         Long::class.javaObjectType      -> "BIGINT"
@@ -45,7 +51,8 @@ object PostgresDialect : MigrationDialect {
         ByteArray::class.java           -> "BYTEA"
         else -> throw UnsupportedOperationException(
             "No Postgres DDL type mapping for R2DBC driver type '${codec.sqlType.name}'. " +
-            "Provide a custom MigrationDialect subclass or use a supported built-in Codec."
+            "Implement MigratableCodec on your Codec, provide a custom MigrationDialect, " +
+            "or use a supported built-in Codec."
         )
     }
 }

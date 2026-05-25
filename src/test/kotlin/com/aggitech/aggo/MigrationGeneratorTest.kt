@@ -2,6 +2,7 @@ package com.aggitech.aggo
 
 import com.aggitech.aggo.dialect.PostgresDialect
 import com.aggitech.aggo.migration.MigrationColumn
+import com.aggitech.aggo.migration.MigrationCustomType
 import com.aggitech.aggo.migration.MigrationSchema
 import com.aggitech.aggo.migration.MigrationTable
 import com.aggitech.aggo.migration.createTableSql
@@ -15,6 +16,7 @@ import com.aggitech.aggo.schema.Codec
 import com.aggitech.aggo.schema.InstantCodec
 import com.aggitech.aggo.schema.IntCodec
 import com.aggitech.aggo.schema.LongCodec
+import com.aggitech.aggo.schema.MigratableCodec
 import com.aggitech.aggo.schema.StringCodec
 import com.aggitech.aggo.schema.Table
 import com.aggitech.aggo.schema.UuidCodec
@@ -48,6 +50,47 @@ private object OrderItemsTable : Table<Unit>("order_items") {
 private object TagsTable : Table<Unit>("tags") {
     val tagName = column("name", StringCodec, check = Checks.length(max = 50)) { null }
     override fun fromRow(row: Row): Unit = Unit
+}
+
+// M-10 fixtures: MigratableCodec for a Postgres ENUM type
+private enum class Priority { LOW, MEDIUM, HIGH }
+
+private object PriorityCodec : MigratableCodec<Priority> {
+    override val sqlType     = String::class.java
+    override val ddlTypeName = "priority_level"
+    override val createDdl   =
+        "CREATE TYPE priority_level AS ENUM ('LOW', 'MEDIUM', 'HIGH');"
+
+    override fun encode(value: Priority?): Any? = value?.name
+    override fun decode(raw: Any?): Priority? = (raw as? String)?.let { Priority.valueOf(it) }
+}
+
+private object TasksTable : Table<Unit>("tasks") {
+    val id       = column("id",       UuidCodec,     isPrimaryKey = true) { null }
+    val priority = column("priority", PriorityCodec)                      { null }
+    override fun fromRow(row: io.r2dbc.spi.Row): Unit = Unit
+}
+
+// M-18 fixture: second table that also references PriorityCodec — for deduplication test
+private object SubtasksTable : Table<Unit>("subtasks") {
+    val id       = column("id",       UuidCodec,     isPrimaryKey = true) { null }
+    val priority = column("priority", PriorityCodec)                      { null }
+    override fun fromRow(row: io.r2dbc.spi.Row): Unit = Unit
+}
+
+// M-11 fixture: MigratableCodec with createDdl = null (externally managed type)
+private object ExternalTypeCodec : MigratableCodec<String> {
+    override val sqlType     = String::class.java
+    override val ddlTypeName = "external_enum"
+    override val createDdl: String? = null  // type exists already, no CREATE needed
+
+    override fun encode(value: String?): Any? = value
+    override fun decode(raw: Any?): String? = raw?.toString()
+}
+
+private object ExternalTable : Table<Unit>("external_items") {
+    val kind = column("kind", ExternalTypeCodec) { null }
+    override fun fromRow(row: io.r2dbc.spi.Row): Unit = Unit
 }
 
 // M-9 fixtures: must be top-level because named objects cannot be local in Kotlin
@@ -221,5 +264,95 @@ class MigrationGeneratorTest : StringSpec({
 
         val createStep = plan.steps.first { it.change == "create table accounts" }
         createStep.sql!! shouldStartWith "CREATE TABLE IF NOT EXISTS"
+    }
+
+    // M-10: MigratableCodec uses ddlTypeName as the column DDL type
+    "columnSqlType returns ddlTypeName for MigratableCodec" {
+        val sql = TasksTable.createTableSql(PostgresDialect)
+        sql shouldContain "\"priority\" priority_level NOT NULL"
+    }
+
+    // M-11: migrationSchema collects MigratableCodec.createDdl into customTypes
+    "migrationSchema collects MigratableCodec custom types with createDdl" {
+        val schema = migrationSchema("v1", listOf(TasksTable), PostgresDialect)
+        schema.customTypes.size shouldBe 1
+        schema.customTypes.single().name shouldBe "priority_level"
+        schema.customTypes.single().createDdl shouldBe
+            "CREATE TYPE priority_level AS ENUM ('LOW', 'MEDIUM', 'HIGH');"
+    }
+
+    // M-12: MigratableCodec with null createDdl is NOT collected in customTypes
+    "migrationSchema skips MigratableCodec with null createDdl" {
+        val schema = migrationSchema("v1", listOf(ExternalTable), PostgresDialect)
+        schema.customTypes shouldBe emptyList()
+    }
+
+    // M-13: migrationPlan without previous schema emits custom type DDL before CREATE TABLE
+    "migrationPlan emits custom type step before CREATE TABLE on first run" {
+        val schema = migrationSchema("v1", listOf(TasksTable), PostgresDialect)
+        val plan = migrationPlan(schema, PostgresDialect)
+
+        plan.steps.size shouldBe 2
+        plan.steps[0].change shouldBe "create custom type priority_level"
+        plan.steps[0].sql shouldBe "CREATE TYPE priority_level AS ENUM ('LOW', 'MEDIUM', 'HIGH');"
+        plan.steps[0].requiresManualMigration shouldBe false
+        plan.steps[1].change shouldBe "create table tasks"
+    }
+
+    // M-14: migrationPlan diff — new custom type emits DDL step
+    "migrationPlan diff adds new custom type step when type appears for the first time" {
+        val previous = migrationSchema("v1", listOf(TagsTable), PostgresDialect)
+        val current  = migrationSchema("v2", listOf(TagsTable, TasksTable), PostgresDialect)
+        val plan = migrationPlan(current, PostgresDialect, previous = previous)
+
+        val typeStep = plan.steps.first { it.change == "create custom type priority_level" }
+        typeStep.sql shouldBe "CREATE TYPE priority_level AS ENUM ('LOW', 'MEDIUM', 'HIGH');"
+        typeStep.requiresManualMigration shouldBe false
+    }
+
+    // M-15: migrationPlan diff — unchanged custom type emits no step
+    "migrationPlan diff emits no step when custom type DDL is unchanged" {
+        val previous = migrationSchema("v1", listOf(TasksTable), PostgresDialect)
+        val current  = migrationSchema("v2", listOf(TasksTable), PostgresDialect)
+        val plan = migrationPlan(current, PostgresDialect, previous = previous)
+
+        plan.steps.none { it.change.contains("priority_level") } shouldBe true
+    }
+
+    // M-16: migrationPlan diff — changed createDdl becomes a manual step
+    "migrationPlan diff marks changed custom type DDL as manual migration" {
+        val previous = MigrationSchema(
+            "v1",
+            listOf(MigrationTable("tasks", listOf(MigrationColumn("id", "UUID", false)))),
+            customTypes = listOf(MigrationCustomType("priority_level", "CREATE TYPE priority_level AS ENUM ('LOW');"))
+        )
+        val current = migrationSchema("v2", listOf(TasksTable), PostgresDialect)
+        val plan = migrationPlan(current, PostgresDialect, previous = previous)
+
+        val manualStep = plan.steps.first { it.change.contains("priority_level") }
+        manualStep.requiresManualMigration shouldBe true
+        manualStep.change shouldContain "DDL changed"
+    }
+
+    // M-17: migrationPlan diff — dropped custom type is flagged as manual
+    "migrationPlan diff marks removed custom type as manual migration" {
+        val previous = MigrationSchema(
+            "v1",
+            listOf(MigrationTable("tasks", listOf(MigrationColumn("id", "UUID", false)))),
+            customTypes = listOf(MigrationCustomType("old_type", "CREATE TYPE old_type AS ENUM ('X');"))
+        )
+        val current = migrationSchema("v2", listOf(TagsTable), PostgresDialect)
+        val plan = migrationPlan(current, PostgresDialect, previous = previous)
+
+        val dropStep = plan.steps.first { it.change.contains("old_type") }
+        dropStep.requiresManualMigration shouldBe true
+        dropStep.change shouldContain "removed"
+    }
+
+    // M-18: same MigratableCodec referenced by two different tables contributes only one customType entry
+    "migrationSchema deduplicates same MigratableCodec across multiple tables" {
+        val schema = migrationSchema("v1", listOf(TasksTable, SubtasksTable), PostgresDialect)
+        schema.customTypes.size shouldBe 1
+        schema.customTypes.single().name shouldBe "priority_level"
     }
 })

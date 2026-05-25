@@ -2,6 +2,7 @@ package com.aggitech.aggo.migration
 
 import com.aggitech.aggo.dialect.MigrationDialect
 import com.aggitech.aggo.dialect.SqlDialect
+import com.aggitech.aggo.schema.MigratableCodec
 import com.aggitech.aggo.schema.Table
 
 /**
@@ -44,10 +45,17 @@ import com.aggitech.aggo.schema.Table
  * target database; the rest of the logic is dialect-agnostic.
  */
 
+/** Custom PostgreSQL type (ENUM, DOMAIN, etc.) tracked in the migration snapshot. */
+data class MigrationCustomType(
+    val name: String,
+    val createDdl: String,
+)
+
 /** Immutable database snapshot used to generate migrations without Aggo runtime objects. */
 data class MigrationSchema(
     val version: String,
     val tables: List<MigrationTable>,
+    val customTypes: List<MigrationCustomType> = emptyList(),
 ) {
     init {
         require(SCHEMA_VERSION_REGEX.matches(version)) {
@@ -55,6 +63,9 @@ data class MigrationSchema(
         }
         require(tables.map { it.name }.toSet().size == tables.size) {
             "duplicate table in migration schema"
+        }
+        require(customTypes.map { it.name }.toSet().size == customTypes.size) {
+            "duplicate custom type in migration schema"
         }
     }
 }
@@ -149,11 +160,22 @@ fun migrationSchema(
     version: String,
     tables: Iterable<Table<*>>,
     dialect: MigrationDialect,
-): MigrationSchema =
-    MigrationSchema(
+): MigrationSchema {
+    val tableList = tables.toList()
+    val customTypes = tableList
+        .flatMap { it.columns }
+        .map { it.codec }
+        .filterIsInstance<MigratableCodec<*>>()
+        .filter { it.createDdl != null }
+        .distinctBy { it.ddlTypeName }
+        .map { MigrationCustomType(it.ddlTypeName, it.createDdl!!) }
+
+    return MigrationSchema(
         version = version,
-        tables = tables.map { it.toMigrationTable(dialect) },
+        tables = tableList.map { it.toMigrationTable(dialect) },
+        customTypes = customTypes,
     )
+}
 
 /**
  * Creates a versioned migration plan.
@@ -169,7 +191,13 @@ fun migrationPlan(
     previous: MigrationSchema? = null,
     ifNotExists: Boolean = false,
 ): MigrationPlan {
-    val steps = if (previous == null) {
+    // Custom type steps come first — types must exist before CREATE TABLE references them.
+    val customTypeSteps = diffCustomTypes(
+        previous = previous?.customTypes ?: emptyList(),
+        current = current.customTypes,
+    )
+
+    val tableSteps = if (previous == null) {
         current.tables.map { table ->
             MigrationStep(
                 change = "create table ${table.name}",
@@ -179,7 +207,8 @@ fun migrationPlan(
     } else {
         diffSchemas(previous, current, dialect, ifNotExists)
     }
-    return MigrationPlan(previous?.version, current.version, steps)
+
+    return MigrationPlan(previous?.version, current.version, customTypeSteps + tableSteps)
 }
 
 /**
@@ -384,5 +413,39 @@ private fun diffTable(
 private fun dropNotNullSql(tableName: String, column: MigrationColumn, dialect: MigrationDialect): String =
     "ALTER TABLE ${dialect.quoteIdentifier(tableName)} ALTER COLUMN " +
         "${dialect.quoteIdentifier(column.name)} DROP NOT NULL;"
+
+private fun diffCustomTypes(
+    previous: List<MigrationCustomType>,
+    current: List<MigrationCustomType>,
+): List<MigrationStep> {
+    val steps = mutableListOf<MigrationStep>()
+    val previousMap = previous.associateBy { it.name }
+    val currentMap = current.associateBy { it.name }
+
+    for (type in current) {
+        val old = previousMap[type.name]
+        when {
+            old == null -> steps += MigrationStep(
+                change = "create custom type ${type.name}",
+                sql = type.createDdl,
+            )
+            old.createDdl != type.createDdl -> steps += MigrationStep(
+                change = "custom type '${type.name}' DDL changed — review and migrate manually",
+                requiresManualMigration = true,
+            )
+        }
+    }
+
+    for (type in previous) {
+        if (type.name !in currentMap) {
+            steps += MigrationStep(
+                change = "custom type '${type.name}' removed — drop manually if safe",
+                requiresManualMigration = true,
+            )
+        }
+    }
+
+    return steps
+}
 
 private val SCHEMA_VERSION_REGEX = Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")

@@ -52,6 +52,12 @@ internal fun MigrationSchema.toJson(): String = buildString {
         val tableComma = if (ti < tables.lastIndex) "," else ""
         appendLine("    }$tableComma")
     }
+    appendLine("  ],")
+    appendLine("  \"customTypes\": [")
+    customTypes.forEachIndexed { i, ct ->
+        val comma = if (i < customTypes.lastIndex) "," else ""
+        appendLine("    {\"name\":${jsonString(ct.name)},\"createDdl\":${jsonString(ct.createDdl)}}$comma")
+    }
     appendLine("  ]")
     append("}")
 }
@@ -126,7 +132,18 @@ internal fun migrationSchemaFromJson(json: String): MigrationSchema {
         MigrationTable(name = name, columns = columns, checks = checks, primaryKey = primaryKey)
     }
 
-    return MigrationSchema(version = version, tables = tables)
+    @Suppress("UNCHECKED_CAST")
+    val customTypesRaw = root["customTypes"] as? List<*> ?: emptyList<Any>()
+    val customTypes = customTypesRaw.map { ctRaw ->
+        @Suppress("UNCHECKED_CAST")
+        val c = ctRaw as Map<String, Any>
+        MigrationCustomType(
+            name = c["name"] as? String ?: throw IllegalArgumentException("customType missing 'name'"),
+            createDdl = c["createDdl"] as? String ?: throw IllegalArgumentException("customType missing 'createDdl'"),
+        )
+    }
+
+    return MigrationSchema(version = version, tables = tables, customTypes = customTypes)
 }
 
 private class JsonReader(private val src: String, private var pos: Int = 0) {

@@ -39,6 +39,18 @@ class Column<E, V>(
     fun readRequired(row: Row): V =
         read(row) ?: error("Column '${table.name}.$name' is null but was read as required")
 
+    /**
+     * Shorthand for [readRequired]. Prefer in [com.aggitech.aggo.schema.Table.fromRow]
+     * for conciseness. Also works as a function reference: `id::required`.
+     */
+    fun required(row: Row): V = readRequired(row)
+
+    /**
+     * Shorthand for [read]. Prefer in [com.aggitech.aggo.schema.Table.fromRow]
+     * for nullable columns. Also works as a function reference: `note::nullable`.
+     */
+    fun nullable(row: Row): V? = read(row)
+
     override fun toString(): String = "${table.name}.$name"
 
     /** Identity-based equality on (table.name, column.name) — safe for use in sets/maps. */

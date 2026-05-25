@@ -2,6 +2,7 @@ package com.aggitech.aggo
 
 import com.aggitech.aggo.migration.MigrationCheck
 import com.aggitech.aggo.migration.MigrationColumn
+import com.aggitech.aggo.migration.MigrationCustomType
 import com.aggitech.aggo.migration.MigrationSchema
 import com.aggitech.aggo.migration.MigrationTable
 import com.aggitech.aggo.migration.migrationSchemaFromJson
@@ -147,5 +148,51 @@ class MigrationSnapshotIOTest : StringSpec({
         val nested = tmp.resolve("deep/nested/snapshot.json")
         writeSnapshot(original, nested)
         readSnapshot(nested) shouldBe original
+    }
+
+    // SN-1: customTypes round-trips through JSON serialization
+    "round-trips a schema with customTypes" {
+        val schema = MigrationSchema(
+            version = "v-custom",
+            tables = listOf(
+                MigrationTable("items", listOf(MigrationColumn("id", "UUID", false)))
+            ),
+            customTypes = listOf(
+                MigrationCustomType("status_type", "CREATE TYPE status_type AS ENUM ('A','B');"),
+                MigrationCustomType("priority_level", "CREATE TYPE priority_level AS ENUM ('LOW','HIGH');"),
+            ),
+        )
+        val restored = migrationSchemaFromJson(schema.toJson())
+        restored.customTypes.size shouldBe 2
+        restored.customTypes[0].name shouldBe "status_type"
+        restored.customTypes[0].createDdl shouldBe "CREATE TYPE status_type AS ENUM ('A','B');"
+        restored.customTypes[1].name shouldBe "priority_level"
+    }
+
+    // SN-2: JSON without customTypes field deserializes as empty list (backwards compatibility)
+    "migrationSchemaFromJson tolerates missing customTypes field" {
+        val json = """
+            {
+              "version": "v-old",
+              "tables": [
+                {
+                  "name": "legacy",
+                  "columns": [{"name":"id","sqlType":"TEXT","nullable":false,"generated":false}],
+                  "checks": [],
+                  "primaryKey": ["id"]
+                }
+              ]
+            }
+        """.trimIndent()
+        val schema = migrationSchemaFromJson(json)
+        schema.customTypes shouldBe emptyList()
+    }
+
+    // SN-3: empty customTypes serializes to empty array and round-trips cleanly
+    "empty customTypes serializes to [] and round-trips" {
+        val schema = simpleSchema("v-empty-ct")
+        schema.customTypes shouldBe emptyList()
+        val restored = migrationSchemaFromJson(schema.toJson())
+        restored.customTypes shouldBe emptyList()
     }
 })
