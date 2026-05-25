@@ -1,0 +1,38 @@
+name: Publish to Maven Central
+
+on:
+  push:
+    tags:
+      - 'v*'           # trigger on version tags: v0.3.0, v1.0.0, etc.
+  workflow_dispatch:   # allow manual trigger from the Actions UI
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21 with Central credentials
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+          server-id: central
+          server-username: CENTRAL_USERNAME
+          server-password: CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          # tells setup-java which env var carries the passphrase for the imported key
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      - name: Run tests before publishing
+        run: mvn test -Dtest='!IntegrationTest' --no-transfer-progress
+
+      - name: Publish to Maven Central
+        run: mvn deploy -P central --no-transfer-progress -DskipTests
+        env:
+          CENTRAL_USERNAME:     ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD:     ${{ secrets.CENTRAL_PASSWORD }}
+          # maven-gpg-plugin 3.x reads MAVEN_GPG_PASSPHRASE automatically
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}

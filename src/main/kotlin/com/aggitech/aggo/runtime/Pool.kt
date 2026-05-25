@@ -13,30 +13,69 @@ import kotlinx.coroutines.reactive.awaitSingle
 import java.time.Duration
 
 /**
- * Configuration for [AggoPool]. Mirrors the most useful r2dbc-pool knobs without
- * forcing the consumer to depend on r2dbc-pool directly.
+ * Connection pool tuning options. Passed as `pool = PoolConfig(…)` inside [PostgresConfig].
+ *
+ * The defaults suit most microservices; adjust only when you have measured a bottleneck.
+ *
+ * ```kotlin
+ * PostgresConfig(
+ *     host = "db.internal",
+ *     database = "mydb",
+ *     user = "app",
+ *     password = secret,
+ *     pool = PoolConfig(
+ *         initialSize = 5,
+ *         maxSize     = 20,
+ *         maxIdleTime = Duration.ofMinutes(10),
+ *     )
+ * )
+ * ```
  */
 data class PoolConfig(
+    /** Connections opened eagerly at startup. */
     val initialSize: Int = 2,
+    /** Maximum simultaneous connections. Requests that exceed this block until [maxAcquireTime]. */
     val maxSize: Int = 10,
+    /** How long an idle connection stays in the pool before being closed. */
     val maxIdleTime: Duration = Duration.ofMinutes(5),
+    /** Maximum time to wait for an available connection before throwing. */
     val maxAcquireTime: Duration = Duration.ofSeconds(5),
+    /** SQL statement used to validate connections before lending them. */
     val validationQuery: String = "SELECT 1",
     /**
-     * P-4: prepared-statement cache size per pooled connection. Driver-side
-     * statement reuse skips the parse + plan stage on hot queries. Passed
-     * through `preparedStatementCacheQueries` r2dbc-postgresql option.
-     * Set to 0 to disable; default matches the driver's default.
+     * Number of prepared statements cached per pooled connection.
+     * Driver-level caching skips the parse+plan stage on repeated queries.
+     * Set to `0` to disable the cache entirely.
      */
     val preparedStatementCacheQueries: Int = 256,
 )
 
+/**
+ * Connection parameters for a PostgreSQL database.
+ *
+ * All string fields are validated against strict allowlists at construction time
+ * to prevent URL-injection attacks via malicious host/database/user values.
+ *
+ * ```kotlin
+ * val config = PostgresConfig(
+ *     host     = "localhost",
+ *     port     = 5432,
+ *     database = "myapp",
+ *     user     = "appuser",
+ *     password = System.getenv("DB_PASSWORD"),
+ *     sslMode  = "require",  // or "disable", "verify-full", etc.
+ *     pool     = PoolConfig(maxSize = 20),
+ * )
+ * val aggo = Aggo(AggoPool.postgres(config))
+ * ```
+ */
 data class PostgresConfig(
     val host: String,
     val port: Int = 5432,
     val database: String,
     val user: String,
     val password: String,
+    /** R2DBC SSL mode: `"disable"`, `"allow"`, `"prefer"`, `"require"`, `"verify-ca"`, `"verify-full"`. */
     val sslMode: String? = null,
     val pool: PoolConfig = PoolConfig(),
 ) {
@@ -58,10 +97,10 @@ data class PostgresConfig(
 }
 
 /**
- * Production-grade pool wrapper. Delegates to `io.r2dbc.pool.ConnectionPool`
- * (resolves connection-leak, race, validation, and recursive-acquire bugs
- * from the original AggORM). [acquire] / [release] are exposed so [Session]
- * can hold a connection across multiple statements (the transactional fix).
+ * Managed connection pool used by [Aggo]. Create it via [AggoPool.Companion.postgres].
+ *
+ * Do not use [acquire] / [release] directly — those are internal hooks for [Aggo.read]
+ * and [Aggo.tx]. Interact with the database exclusively through the [Aggo] API.
  */
 class AggoPool internal constructor(
     private val delegate: ConnectionPool,
@@ -80,6 +119,16 @@ class AggoPool internal constructor(
     }
 
     companion object {
+        /**
+         * Creates an [AggoPool] connected to a PostgreSQL database.
+         *
+         * ```kotlin
+         * val pool = AggoPool.postgres(
+         *     PostgresConfig(host = "localhost", database = "mydb", user = "app", password = secret)
+         * )
+         * val aggo = Aggo(pool)
+         * ```
+         */
         fun postgres(config: PostgresConfig): AggoPool {
             val optionsBuilder = ConnectionFactoryOptions.builder()
                 .option(ConnectionFactoryOptions.DRIVER, "postgresql")

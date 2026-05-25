@@ -31,16 +31,32 @@ import kotlinx.coroutines.reactive.collect
 import org.reactivestreams.Publisher
 
 /**
- * Bound to a single [Connection] for its entire lifetime. Every query method
- * runs against that connection, so when [Aggo.tx] wraps a Session in a
- * transaction every statement actually participates.
+ * Query execution context bound to a single [Connection].
  *
- * This is the fix for the upstream "transactions are no-ops" bug.
+ * You never instantiate `Session` directly. It is the receiver (`this`) inside
+ * [Aggo.read] and [Aggo.tx] blocks:
  *
- * 0.2.0 — methods that accept a [Table] + builder block (e.g. [update],
- * [insert], [delete], [fetchAll]) are the preferred form; the older variants
- * that take a pre-built [Update]/[Insert]/[Delete]/[Select] are kept for
- * callers that want to inspect or persist the query object.
+ * ```kotlin
+ * aggo.read {
+ *     // `this` is a Session — call fetchAll, fetchOne, stream, fetchAllJoined, etc.
+ *     val users = fetchAll(UsersTable) { where { UsersTable.active eq true } }
+ * }
+ *
+ * aggo.tx {
+ *     // All statements share the same connection and transaction
+ *     update(UsersTable) {
+ *         UsersTable.name setTo "New Name"
+ *         where { UsersTable.id eq userId }
+ *     }
+ *     insert(AuditTable) { AuditTable.event setTo "name.changed" }
+ * }
+ * ```
+ *
+ * Every method accepts either a pre-built query object (from the `select { }`,
+ * `insert { }`, … DSL functions) or a Table + builder block directly.
+ * The builder-block form is shorter and preferred for one-off queries.
+ *
+ * @see Aggo the entry point that creates and manages Session lifetimes
  */
 class Session internal constructor(
     private val connection: Connection,
@@ -49,16 +65,32 @@ class Session internal constructor(
 
     // ----- SELECT ---------------------------------------------------------
 
+    /**
+     * Fetches all matching rows into a [List]. Prefer [stream] for result sets
+     * that may be very large (thousands+ rows) to avoid loading them all into memory.
+     *
+     * ```kotlin
+     * val users = fetchAll(UsersTable) {
+     *     where { UsersTable.active eq true }
+     *     orderBy { UsersTable.name.asc() }
+     *     limit(100)
+     * }
+     * ```
+     */
     suspend fun <E> fetchAll(query: Select<E>): List<E> =
         stream(query).toList()
 
+    /** Builder-block form of [fetchAll]. */
     suspend fun <E> fetchAll(table: Table<E>, block: SelectBuilder<E>.() -> Unit = {}): List<E> =
         fetchAll(com.aggitech.aggo.dsl.select(table, block))
 
     /**
-     * Returns the first matching row, or null. Internally enforces `LIMIT 1`
-     * via the renderer (P-3 — avoids allocating a `Select.copy(limit = 1)`
-     * just to pass an int).
+     * Fetches the first matching row, or `null` if none exists.
+     * Always sends `LIMIT 1` to the database regardless of any limit in [query].
+     *
+     * ```kotlin
+     * val user = fetchOne(UsersTable) { where { UsersTable.email eq email } }
+     * ```
      */
     suspend fun <E> fetchOne(query: Select<E>): E? =
         flow {
@@ -70,9 +102,23 @@ class Session internal constructor(
             }
         }.toList().firstOrNull()
 
+    /** Builder-block form of [fetchOne]. Returns `null` when no row matches. */
     suspend fun <E> fetchOne(table: Table<E>, block: SelectBuilder<E>.() -> Unit = {}): E? =
         fetchOne(com.aggitech.aggo.dsl.select(table, block))
 
+    /**
+     * Returns a cold [Flow] that streams rows one at a time — no intermediate
+     * list is allocated. Use this instead of [fetchAll] for large result sets.
+     *
+     * ```kotlin
+     * stream(ReportsTable) { where { ReportsTable.year eq 2025 } }
+     *     .filter { it.revenue > 0 }
+     *     .collect { report -> export(report) }
+     * ```
+     *
+     * The flow must be collected inside the same [Aggo.read] or [Aggo.tx] block
+     * that produced it — the underlying connection is released when the block ends.
+     */
     fun <E> stream(query: Select<E>): Flow<E> = flow {
         val rendered = renderSelect(query, dialect)
         val table = query.table
@@ -84,12 +130,28 @@ class Session internal constructor(
         }
     }
 
+    /** Builder-block form of [stream]. */
     fun <E> stream(table: Table<E>, block: SelectBuilder<E>.() -> Unit = {}): Flow<E> =
         stream(com.aggitech.aggo.dsl.select(table, block))
 
+    /**
+     * Executes a LEFT JOIN query and returns all result pairs.
+     * The right-hand side of each [JoinedRow] is `null` when no matching row exists
+     * (standard LEFT JOIN semantics).
+     *
+     * ```kotlin
+     * val rows: List<JoinedRow<Order, User?>> = fetchAllJoined(
+     *     OrdersTable.leftJoin(UsersTable) { OrdersTable.userId eq UsersTable.id }
+     *         .where { OrdersTable.status eq "PENDING" }
+     *         .limit(50)
+     * )
+     * rows.forEach { (order, user) -> println("${order.id} placed by ${user?.name}") }
+     * ```
+     */
     suspend fun <L, R> fetchAllJoined(query: JoinSelect<L, R>): List<JoinedRow<L, R>> =
         streamJoined(query).toList()
 
+    /** Streaming form of [fetchAllJoined]. Right side of each row is `null` on no-match. */
     fun <L, R> streamJoined(query: JoinSelect<L, R>): Flow<JoinedRow<L, R>> = flow {
         val rendered = renderJoinSelect(query, dialect)
         executeForResults(rendered).asResultFlow().collect { result ->
@@ -100,18 +162,48 @@ class Session internal constructor(
 
     // ----- INSERT ---------------------------------------------------------
 
+    /** Execute a pre-built [Insert] query. Returns the number of rows affected. */
     suspend fun <E> insert(query: Insert<E>): Long = executeUpdate(renderInsert(query, dialect))
 
+    /**
+     * Insert an entity by walking its [Table]'s writable columns (those with
+     * `isGenerated = false`). Generated columns (sequences, triggers, DEFAULT)
+     * are skipped automatically.
+     *
+     * ```kotlin
+     * aggo.tx { insert(UsersTable, user) }
+     * ```
+     */
     suspend fun <E> insert(table: Table<E>, entity: E): Long =
         insert(com.aggitech.aggo.dsl.insert(table, entity))
 
+    /**
+     * Insert a partial row by specifying only the columns you want to set.
+     * Useful when the entity has many columns and only a subset needs to be written,
+     * or when the entity object is not available at the call site.
+     *
+     * ```kotlin
+     * insert(UsersTable) {
+     *     UsersTable.email  setTo Email("alice@example.com")
+     *     UsersTable.name   setTo "Alice"
+     *     UsersTable.active setTo true
+     * }
+     * ```
+     */
     suspend fun <E> insert(table: Table<E>, block: InsertBuilder<E>.() -> Unit): Long =
         insert(com.aggitech.aggo.dsl.insert(table, block))
 
     /**
-     * Insert and return the generated primary key, decoded via [pkColumn]'s codec.
-     * Supports any PK type (UUID, String/TSID, Long, …) — fixes upstream
-     * "assume Long" and "drops all but first row" bugs.
+     * Insert a row and return the generated primary key decoded via [pkColumn]'s codec.
+     * Works with any PK type — UUID, TSID (String), ULID, Long, etc.
+     *
+     * ```kotlin
+     * val newId: Tsid? = insertReturning(UsersTable, UsersTable.id) {
+     *     UsersTable.email  setTo email
+     *     UsersTable.name   setTo name
+     *     UsersTable.active setTo true
+     * }
+     * ```
      */
     suspend fun <E, V> insertReturning(query: Insert<E>, pkColumn: Column<E, V>): V? {
         val rendered = renderInsert(query, dialect, returningPk = true)
@@ -139,13 +231,35 @@ class Session internal constructor(
 
     // ----- UPDATE / DELETE -----------------------------------------------
 
+    /** Execute a pre-built [Update] query. Returns the number of rows affected. */
     suspend fun <E> update(query: Update<E>): Long = executeUpdate(renderUpdate(query, dialect))
 
+    /**
+     * Update columns for rows matching the WHERE clause. Returns the number of rows affected.
+     *
+     * ```kotlin
+     * val affected = update(UsersTable) {
+     *     UsersTable.active setTo false
+     *     UsersTable.name   setTo "Deactivated"
+     *     where { UsersTable.id eq userId }
+     * }
+     * check(affected == 1L) { "user $userId not found" }
+     * ```
+     */
     suspend fun <E> update(table: Table<E>, block: UpdateBuilder<E>.() -> Unit): Long =
         update(com.aggitech.aggo.dsl.update(table, block))
 
+    /** Execute a pre-built [Delete] query. Returns the number of rows deleted. */
     suspend fun <E> delete(query: Delete<E>): Long = executeUpdate(renderDelete(query, dialect))
 
+    /**
+     * Delete rows matching the WHERE clause. Returns the number of rows deleted.
+     * Omitting the WHERE clause deletes all rows in the table.
+     *
+     * ```kotlin
+     * delete(UsersTable) { where { UsersTable.id eq userId } }
+     * ```
+     */
     suspend fun <E> delete(table: Table<E>, block: DeleteBuilder<E>.() -> Unit = {}): Long =
         delete(com.aggitech.aggo.dsl.delete(table, block))
 

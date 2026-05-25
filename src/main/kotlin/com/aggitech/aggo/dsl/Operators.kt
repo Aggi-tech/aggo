@@ -6,9 +6,59 @@ import com.aggitech.aggo.query.Predicate
 import com.aggitech.aggo.schema.Column
 
 /**
- * Block-style predicate operators. Every operator works directly on a
- * [Column] descriptor, so the resulting [Predicate] tree carries the codec
- * needed to bind values safely — no reflection, no string column names.
+ * WHERE clause operators — used inside `where { … }` blocks in SELECT, UPDATE, DELETE,
+ * and JOIN queries.
+ *
+ * Every operator is an infix extension on [Column], so you always reference the typed
+ * column descriptor rather than a string name. The compiler enforces value types;
+ * parameter binding is handled automatically via each column's [com.aggitech.aggo.schema.Codec].
+ *
+ * ## Comparison operators
+ *
+ * ```kotlin
+ * where { UsersTable.email  eq  Email("alice@example.com") }  // =
+ * where { UsersTable.email  ne  Email("alice@example.com") }  // <>
+ * where { UsersTable.age    gt  18 }                          // >
+ * where { UsersTable.age    gte 18 }                          // >=
+ * where { UsersTable.age    lt  65 }                          // <
+ * where { UsersTable.age    lte 65 }                          // <=
+ * ```
+ *
+ * ## String matching
+ *
+ * ```kotlin
+ * where { UsersTable.name like    "%alice%" }   // LIKE  (case-sensitive)
+ * where { UsersTable.name notLike "%admin%" }   // NOT LIKE
+ * ```
+ *
+ * ## Membership / range
+ *
+ * ```kotlin
+ * where { UsersTable.status inList    listOf("ACTIVE", "PENDING") }  // IN (…)
+ * where { UsersTable.status notInList listOf("BANNED", "DELETED") }  // NOT IN (…)
+ * where { UsersTable.age.between(18, 65) }                           // BETWEEN 18 AND 65
+ * ```
+ *
+ * ## Null checks
+ *
+ * ```kotlin
+ * where { UsersTable.deletedAt.isNull() }     // IS NULL
+ * where { UsersTable.deletedAt.isNotNull() }  // IS NOT NULL
+ * ```
+ *
+ * ## Column-to-column comparison (for JOINs)
+ *
+ * ```kotlin
+ * OrdersTable.leftJoin(UsersTable) { OrdersTable.userId eq UsersTable.id }
+ * ```
+ *
+ * ## Logical composition
+ *
+ * ```kotlin
+ * where { (UsersTable.active eq true) and (UsersTable.age gte 18) }
+ * where { (UsersTable.role eq "ADMIN") or (UsersTable.role eq "SUPERUSER") }
+ * where { not(UsersTable.active eq true) }
+ * ```
  */
 
 private fun <E, V> col(c: Column<E, V>): Operand = Operand.Col(c)

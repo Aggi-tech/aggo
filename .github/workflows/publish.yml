@@ -1,0 +1,37 @@
+name: Publish to GitHub Packages
+
+on:
+  push:
+    tags:
+      - 'v*'           # trigger on version tags: v0.3.0, v1.0.0, etc.
+  workflow_dispatch:   # allow manual trigger from the Actions UI
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # required to push to GitHub Packages
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+          # Point Maven's server id at the GitHub Packages repository
+          server-id: github-aggi-tech
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+
+      - name: Run tests before publishing
+        run: mvn test -Dtest='!IntegrationTest' --no-transfer-progress
+
+      - name: Publish to GitHub Packages
+        run: mvn deploy --no-transfer-progress -DskipTests
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
