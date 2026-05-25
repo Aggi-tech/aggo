@@ -9,6 +9,79 @@ Liquibase is no longer part of the workflow. You may still export `plan.sql()`
 to any external migration tool, but Aggo can execute the same plan itself and
 record the applied version in `aggo_schema_versions`.
 
+## AggoMigrateTask — zero-boilerplate Maven entry point
+
+`AggoMigrateTask` is the recommended way to trigger migration generation from
+Maven. It replaces manual `main()` functions with a single-object declaration.
+
+### 1. Declare the task
+
+```kotlin
+// src/main/kotlin/com/example/db/Migrations.kt
+import com.aggitech.aggo.dialect.PostgresDialect
+import com.aggitech.aggo.migration.AggoMigrateTask
+
+object Migrations : AggoMigrateTask() {
+    override val tables  = listOf(UsersTable, OrdersTable, ProductsTable)
+    override val dialect = PostgresDialect
+}
+
+fun main(args: Array<String>) = Migrations.runFromArgs(args)
+```
+
+### 2. Wire exec-maven-plugin in pom.xml
+
+```xml
+<plugin>
+  <groupId>org.codehaus.mojo</groupId>
+  <artifactId>exec-maven-plugin</artifactId>
+  <version>3.4.1</version>
+  <executions>
+    <execution>
+      <id>aggo-migrate</id>
+      <goals><goal>java</goal></goals>
+      <configuration>
+        <mainClass>com.example.db.MigrationsKt</mainClass>
+      </configuration>
+    </execution>
+  </executions>
+</plugin>
+```
+
+### 3. Generate migrations
+
+```bash
+# Timestamp-only version label
+mvn compile exec:java
+
+# With a descriptive name
+mvn compile exec:java -Daggo.name=add_orders_table
+```
+
+The task generates a `{timestamp}_name.sql` file and updates the snapshot. On
+subsequent runs with an unchanged schema it prints `No changes detected.` and
+exits without creating any file.
+
+### Default file locations
+
+| What | Default path | Override via |
+|------|-------------|--------------|
+| Schema snapshot | `src/main/resources/aggo/snapshot.json` | `-Daggo.snapshotFile=…` or `override val snapshotFile` |
+| Migration files | `src/main/resources/aggo/migrations/` | `-Daggo.migrationsDir=…` or `override val migrationsDir` |
+| Version label | _(timestamp only)_ | `-Daggo.name=…` or `args[0]` |
+
+Override paths as system properties or by overriding the `open val` in the
+object:
+
+```kotlin
+object Migrations : AggoMigrateTask() {
+    override val tables       = listOf(UsersTable)
+    override val dialect      = PostgresDialect
+    override val snapshotFile = Paths.get("infra/db/snapshot.json")
+    override val migrationsDir = Paths.get("infra/db/migrations")
+}
+```
+
 ## Versioned schema snapshot
 
 ```kotlin
@@ -238,7 +311,62 @@ Output:
 ALTER TABLE "users" ADD CONSTRAINT "chk_users_email" CHECK (...);
 ```
 
+## Custom DDL types — MigratableCodec
+
+When a column should use a PostgreSQL ENUM or DOMAIN type instead of a standard
+SQL type, implement `MigratableCodec` on the codec. The migration generator
+collects all `createDdl` statements from the current schema's codecs and emits
+them **before** any `CREATE TABLE` that references them.
+
+```kotlin
+enum class Priority { LOW, MEDIUM, HIGH }
+
+object PriorityCodec : MigratableCodec<Priority> {
+    override val sqlType     = String::class.java
+    override val ddlTypeName = "priority_level"
+    override val createDdl   =
+        "CREATE TYPE priority_level AS ENUM ('LOW', 'MEDIUM', 'HIGH');"
+
+    override fun encode(value: Priority?): Any? = value?.name
+    override fun decode(raw: Any?): Priority? =
+        (raw as? String)?.let { Priority.valueOf(it) }
+}
+```
+
+Generated migration plan (first run with `TasksTable` using `PriorityCodec`):
+
+```sql
+-- step 1: custom type
+CREATE TYPE priority_level AS ENUM ('LOW', 'MEDIUM', 'HIGH');
+
+-- step 2: table
+CREATE TABLE IF NOT EXISTS "tasks" (
+    "id"       TEXT           NOT NULL,
+    "priority" priority_level NOT NULL,
+    PRIMARY KEY ("id")
+);
+```
+
+### Custom type diffing
+
+| Change | Action |
+|--------|--------|
+| New type (first time in snapshot) | Auto-emits `createDdl` |
+| Unchanged type | No step emitted |
+| `createDdl` changed | Manual step — review and migrate |
+| Type removed from all columns | Manual step — drop manually if safe |
+
+The snapshot stores custom types alongside tables so the diff is stable across
+generations. See [MigratableCodec](02-schema.md#migratable-codec--custom-postgresql-ddl-types)
+in the schema reference for full codec patterns including DOMAIN types and
+externally managed types.
+
 ## SQL type mapping reference
+
+`PostgresDialect` resolves a column's DDL type in this order:
+
+1. If the codec implements `MigratableCodec` → use `codec.ddlTypeName`
+2. Otherwise → use the built-in mapping below
 
 | Codec | PostgreSQL column type |
 |-------|------------------------|
@@ -256,6 +384,7 @@ ALTER TABLE "users" ADD CONSTRAINT "chk_users_email" CHECK (...);
 | `TsidCodec` | `TEXT` |
 | `UlidCodec` | `TEXT` |
 | `ValueClassCodec(XCodec, ...)` | same as `XCodec` |
+| `MigratableCodec` implementation | `codec.ddlTypeName` |
 
 ## Supporting other databases
 

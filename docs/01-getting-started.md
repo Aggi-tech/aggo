@@ -56,9 +56,9 @@ object UsersTable : Table<User>("users") {
     val active = column("active", BooleanCodec)                                          { it.active }
 
     override fun fromRow(row: Row) = User(
-        id     = id.readRequired(row),
-        name   = name.readRequired(row),
-        active = active.readRequired(row),
+        id     = id.required(row),
+        name   = name.required(row),
+        active = active.required(row),
     )
 }
 

@@ -31,11 +31,11 @@ object UsersTable : Table<User>("users") {
     val createdAt = column("created_at", InstantCodec, isGenerated = true)              { it.createdAt }
 
     override fun fromRow(row: Row) = User(
-        id        = id.readRequired(row),
-        email     = email.readRequired(row),
-        name      = name.readRequired(row),
-        active    = active.readRequired(row),
-        createdAt = createdAt.readRequired(row),
+        id        = id.required(row),
+        email     = email.required(row),
+        name      = name.required(row),
+        active    = active.required(row),
+        createdAt = createdAt.required(row),
     )
 }
 ```
@@ -154,6 +154,44 @@ val score = column("score", IntCodec,
 | `Checks.all(...)` | `(expr1) AND (expr2) AND ...` |
 | `Checks.any(...)` | `(expr1) OR (expr2) OR ...` |
 
+## Reading rows — `required` and `nullable`
+
+`Column` exposes two concise methods for use inside `fromRow`:
+
+| Method | Returns | Use when |
+|--------|---------|----------|
+| `col.required(row)` | `V` (non-null) | column is `NOT NULL` — throws if the database returns null |
+| `col.nullable(row)` | `V?` | column is nullable — returns null without throwing |
+
+```kotlin
+override fun fromRow(row: Row) = User(
+    id        = id.required(row),        // NOT NULL — throws on null
+    email     = email.required(row),
+    name      = name.required(row),
+    bio       = bio.nullable(row),       // nullable — returns null safely
+    createdAt = createdAt.required(row),
+)
+```
+
+Both methods are aliases for `readRequired` and `read` respectively — there is no
+behavioural difference. `readRequired` and `read` remain available for
+backward-compatibility.
+
+### Function references
+
+Because `required` and `nullable` are regular methods, they can be used as Kotlin
+function references wherever a `(Row) -> T` is expected:
+
+```kotlin
+val readId:    (Row) -> UserId   = UsersTable.id::required
+val readBio:   (Row) -> String?  = UsersTable.bio::nullable
+
+// Map a raw row list without repeating table boilerplate:
+val users = rawRows.map { row ->
+    User(id = readId(row), bio = readBio(row), ...)
+}
+```
+
 ## ID generation — TSID and ULID
 
 Aggo ships with time-sortable ID generators.
@@ -181,5 +219,80 @@ val OrderIdCodec = ValueClassCodec(TsidCodec, { OrderId(it.value) }, { Tsid.pars
 object OrdersTable : Table<Order>("orders") {
     val id = column("id", OrderIdCodec, isPrimaryKey = true, check = Checks.tsid()) { it.id }
     ...
+}
+```
+
+## MigratableCodec — custom PostgreSQL DDL types
+
+By default, `PostgresDialect` maps every codec to a standard SQL type (TEXT,
+INTEGER, etc.) based on the R2DBC driver type. Implement `MigratableCodec` when
+you want a column to use a **PostgreSQL ENUM** or **DOMAIN** type instead.
+
+```kotlin
+import com.aggitech.aggo.schema.MigratableCodec
+
+enum class Status { ACTIVE, INACTIVE, SUSPENDED }
+
+object StatusCodec : MigratableCodec<Status> {
+    override val sqlType     = String::class.java   // what the R2DBC driver sees
+    override val ddlTypeName = "status_type"        // used in CREATE TABLE / ALTER TABLE
+    override val createDdl   =                      // emitted before CREATE TABLE
+        "CREATE TYPE status_type AS ENUM ('ACTIVE', 'INACTIVE', 'SUSPENDED');"
+
+    override fun encode(value: Status?): Any? = value?.name
+    override fun decode(raw: Any?): Status? =
+        (raw as? String)?.let { Status.valueOf(it) }
+}
+```
+
+Use it like any codec in a table definition:
+
+```kotlin
+object OrdersTable : Table<Order>("orders") {
+    val id     = column("id",     TsidCodec,   isPrimaryKey = true) { it.id }
+    val status = column("status", StatusCodec)                      { it.status }
+
+    override fun fromRow(row: Row) = Order(
+        id     = id.required(row),
+        status = status.required(row),
+    )
+}
+```
+
+The migration generator automatically emits the `CREATE TYPE` statement before
+the `CREATE TABLE` that references it. See [Migration Generation](06-migrations.md)
+for the full workflow including diffing and snapshot storage.
+
+### DOMAIN types
+
+The same pattern works for PostgreSQL DOMAIN types:
+
+```kotlin
+object EmailCodec : MigratableCodec<Email> {
+    override val sqlType     = String::class.java
+    override val ddlTypeName = "email_domain"
+    override val createDdl   = """
+        CREATE DOMAIN email_domain AS TEXT
+            CHECK (VALUE ~* '^[^@\s]+@[^@\s]+\.[^@\s]+${'$'}' AND char_length(VALUE) <= 255);
+    """.trimIndent()
+
+    override fun encode(value: Email?): Any? = value?.toString()
+    override fun decode(raw: Any?): Email? = (raw as? String)?.let { Email.of(it) }
+}
+```
+
+### Externally managed types
+
+Set `createDdl = null` when the type already exists in the database and should
+not be created by the migration generator:
+
+```kotlin
+object LegacyStatusCodec : MigratableCodec<LegacyStatus> {
+    override val sqlType     = String::class.java
+    override val ddlTypeName = "legacy_status_enum"  // referenced in DDL
+    override val createDdl: String? = null           // type pre-exists, no CREATE emitted
+
+    override fun encode(value: LegacyStatus?): Any? = value?.name
+    override fun decode(raw: Any?): LegacyStatus? = (raw as? String)?.let { LegacyStatus.valueOf(it) }
 }
 ```
