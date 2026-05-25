@@ -1,6 +1,10 @@
 package com.aggitech.aggo.runtime
 
 import com.aggitech.aggo.dialect.SqlDialect
+import com.aggitech.aggo.dsl.DeleteBuilder
+import com.aggitech.aggo.dsl.InsertBuilder
+import com.aggitech.aggo.dsl.SelectBuilder
+import com.aggitech.aggo.dsl.UpdateBuilder
 import com.aggitech.aggo.query.Delete
 import com.aggitech.aggo.query.Insert
 import com.aggitech.aggo.query.JoinSelect
@@ -32,6 +36,11 @@ import org.reactivestreams.Publisher
  * transaction every statement actually participates.
  *
  * This is the fix for the upstream "transactions are no-ops" bug.
+ *
+ * 0.2.0 — methods that accept a [Table] + builder block (e.g. [update],
+ * [insert], [delete], [fetchAll]) are the preferred form; the older variants
+ * that take a pre-built [Update]/[Insert]/[Delete]/[Select] are kept for
+ * callers that want to inspect or persist the query object.
  */
 class Session internal constructor(
     private val connection: Connection,
@@ -43,10 +52,26 @@ class Session internal constructor(
     suspend fun <E> fetchAll(query: Select<E>): List<E> =
         stream(query).toList()
 
-    suspend fun <E> fetchOne(query: Select<E>): E? {
-        val limited = if (query.limit == null) query.copy(limit = 1) else query
-        return stream(limited).toList().firstOrNull()
-    }
+    suspend fun <E> fetchAll(table: Table<E>, block: SelectBuilder<E>.() -> Unit = {}): List<E> =
+        fetchAll(com.aggitech.aggo.dsl.select(table, block))
+
+    /**
+     * Returns the first matching row, or null. Internally enforces `LIMIT 1`
+     * via the renderer (P-3 — avoids allocating a `Select.copy(limit = 1)`
+     * just to pass an int).
+     */
+    suspend fun <E> fetchOne(query: Select<E>): E? =
+        flow {
+            val rendered = renderSelect(query, dialect, limitOverride = 1)
+            val table = query.table
+            executeForResults(rendered).asResultFlow().collect { result ->
+                val mapped: Publisher<E> = result.map { row, _ -> table.fromRow(row) }
+                mapped.collect { emit(it) }
+            }
+        }.toList().firstOrNull()
+
+    suspend fun <E> fetchOne(table: Table<E>, block: SelectBuilder<E>.() -> Unit = {}): E? =
+        fetchOne(com.aggitech.aggo.dsl.select(table, block))
 
     fun <E> stream(query: Select<E>): Flow<E> = flow {
         val rendered = renderSelect(query, dialect)
@@ -58,6 +83,9 @@ class Session internal constructor(
             mapped.collect { value -> emit(value) }
         }
     }
+
+    fun <E> stream(table: Table<E>, block: SelectBuilder<E>.() -> Unit = {}): Flow<E> =
+        stream(com.aggitech.aggo.dsl.select(table, block))
 
     suspend fun <L, R> fetchAllJoined(query: JoinSelect<L, R>): List<JoinedRow<L, R>> =
         streamJoined(query).toList()
@@ -76,6 +104,9 @@ class Session internal constructor(
 
     suspend fun <E> insert(table: Table<E>, entity: E): Long =
         insert(com.aggitech.aggo.dsl.insert(table, entity))
+
+    suspend fun <E> insert(table: Table<E>, block: InsertBuilder<E>.() -> Unit): Long =
+        insert(com.aggitech.aggo.dsl.insert(table, block))
 
     /**
      * Insert and return the generated primary key, decoded via [pkColumn]'s codec.
@@ -100,11 +131,23 @@ class Session internal constructor(
         }
     }
 
+    suspend fun <E, V> insertReturning(
+        table: Table<E>,
+        pkColumn: Column<E, V>,
+        block: InsertBuilder<E>.() -> Unit,
+    ): V? = insertReturning(com.aggitech.aggo.dsl.insert(table, block), pkColumn)
+
     // ----- UPDATE / DELETE -----------------------------------------------
 
     suspend fun <E> update(query: Update<E>): Long = executeUpdate(renderUpdate(query, dialect))
 
+    suspend fun <E> update(table: Table<E>, block: UpdateBuilder<E>.() -> Unit): Long =
+        update(com.aggitech.aggo.dsl.update(table, block))
+
     suspend fun <E> delete(query: Delete<E>): Long = executeUpdate(renderDelete(query, dialect))
+
+    suspend fun <E> delete(table: Table<E>, block: DeleteBuilder<E>.() -> Unit = {}): Long =
+        delete(com.aggitech.aggo.dsl.delete(table, block))
 
     // ----- internals ------------------------------------------------------
 
@@ -132,7 +175,12 @@ class Session internal constructor(
         return statement.execute()
     }
 
-    /** Exposed for advanced callers (e.g. raw DDL in tests). */
+    /**
+     * Execute arbitrary SQL. V-3: gated behind [AggoUnsafe] because it bypasses
+     * identifier validation, codec safety, and the immutable query AST. Reach
+     * for it only for DDL in tests/migrations — never on a production hot path.
+     */
+    @AggoUnsafe
     suspend fun executeRaw(sql: String): Long {
         QueryLog.beforeExecute(sql, emptyList())
         val statement = connection.createStatement(sql)
@@ -143,7 +191,8 @@ class Session internal constructor(
         return total
     }
 
-    @Suppress("unused") // expose connection for advanced raw operations
+    /** V-3: exposing the bare [Connection] lets callers do anything; opt-in required. */
+    @AggoUnsafe
     fun rawConnection(): Connection = connection
 
     private fun <L, R> mapJoinedRow(query: JoinSelect<L, R>, row: Row): JoinedRow<L, R> {
@@ -175,6 +224,3 @@ class Session internal constructor(
 @Suppress("UNCHECKED_CAST")
 private fun Publisher<out Result>.asResultFlow(): Flow<Result> =
     (this as Publisher<Result>).asFlow()
-
-private fun <E> Select<E>.copy(limit: Int? = this.limit): Select<E> =
-    Select(table, where, orderBy, limit, offset)

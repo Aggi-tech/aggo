@@ -21,6 +21,13 @@ class Column<E, V>(
     val isGenerated: Boolean = false,
     val isNullable: Boolean = false,
     val checkExpression: ((columnName: String) -> String)? = null,
+    /**
+     * V-6: when true, every [com.aggitech.aggo.render.Bound] originating from
+     * this column (UPDATE/INSERT assignment or `column eq value` predicate)
+     * is logged as `<redacted>` instead of its raw value. Mark password
+     * digests, tokens, PII you cannot afford in trace logs.
+     */
+    val sensitive: Boolean = false,
 ) {
     /** Read this column out of an R2DBC [Row]. Required nulls are caller's problem. */
     fun read(row: Row): V? = codec.read(row, name)

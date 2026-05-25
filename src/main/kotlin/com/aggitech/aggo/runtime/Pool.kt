@@ -22,6 +22,13 @@ data class PoolConfig(
     val maxIdleTime: Duration = Duration.ofMinutes(5),
     val maxAcquireTime: Duration = Duration.ofSeconds(5),
     val validationQuery: String = "SELECT 1",
+    /**
+     * P-4: prepared-statement cache size per pooled connection. Driver-side
+     * statement reuse skips the parse + plan stage on hot queries. Passed
+     * through `preparedStatementCacheQueries` r2dbc-postgresql option.
+     * Set to 0 to disable; default matches the driver's default.
+     */
+    val preparedStatementCacheQueries: Int = 256,
 )
 
 data class PostgresConfig(
@@ -85,6 +92,12 @@ class AggoPool internal constructor(
             config.sslMode?.let { mode ->
                 optionsBuilder.option(io.r2dbc.spi.Option.valueOf("sslMode"), mode)
             }
+
+            // P-4: driver-side prepared-statement cache.
+            optionsBuilder.option(
+                io.r2dbc.spi.Option.valueOf<Int>("preparedStatementCacheQueries"),
+                config.pool.preparedStatementCacheQueries,
+            )
 
             val factory = ConnectionFactories.get(optionsBuilder.build())
 

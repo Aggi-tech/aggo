@@ -1,5 +1,7 @@
 package com.aggitech.aggo.schema
 
+import com.aggitech.aggo.schema.ids.Tsid
+import com.aggitech.aggo.schema.ids.Ulid
 import io.r2dbc.spi.Row
 import java.math.BigDecimal
 import java.time.Instant
@@ -137,3 +139,9 @@ class ValueClassCodec<V : Any, R : Any>(
 
 /** Convenience reader used by Table.fromRow. Centralizes null handling. */
 fun <V> Codec<V>.read(row: Row, columnName: String): V? = decode(row.get(columnName))
+
+/** ULID stored as 26-char Crockford `text`. Validation happens in Ulid.parse. */
+val UlidCodec: Codec<Ulid> = ValueClassCodec(StringCodec, Ulid::parse, Ulid::value)
+
+/** TSID stored as 13-char Crockford `text`. Validation happens in Tsid.parse. */
+val TsidCodec: Codec<Tsid> = ValueClassCodec(StringCodec, Tsid::parse, Tsid::value)

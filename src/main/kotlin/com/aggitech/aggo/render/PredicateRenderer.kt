@@ -8,14 +8,19 @@ internal object PredicateRenderer {
 
     fun render(predicate: Predicate, ctx: RenderContext): String = when (predicate) {
         is Predicate.Cmp -> {
-            val left = renderOperand(predicate.left, ctx)
-            val right = renderOperand(predicate.right, ctx)
+            // V-6: when one side is a column reference and the other is a
+            // literal, attribute the bound parameter to that column so log
+            // redaction can honour Column.sensitive.
+            val sourceColumn = predicate.left.columnRef() ?: predicate.right.columnRef()
+            val left = renderOperand(predicate.left, ctx, sourceColumn)
+            val right = renderOperand(predicate.right, ctx, sourceColumn)
             "$left ${predicate.op.symbol} $right"
         }
 
         is Predicate.Like -> {
-            val operand = renderOperand(predicate.operand, ctx)
-            val placeholder = ctx.bind(predicate.pattern, com.aggitech.aggo.schema.StringCodec)
+            val sourceColumn = predicate.operand.columnRef()
+            val operand = renderOperand(predicate.operand, ctx, sourceColumn)
+            val placeholder = ctx.bind(predicate.pattern, com.aggitech.aggo.schema.StringCodec, sourceColumn)
             val op = if (predicate.negated) "NOT LIKE" else "LIKE"
             "$operand $op $placeholder"
         }
@@ -36,28 +41,30 @@ internal object PredicateRenderer {
 
     @Suppress("UNCHECKED_CAST")
     private fun <V> renderIn(predicate: Predicate.In<V>, ctx: RenderContext): String {
-        val operand = renderOperand(predicate.operand, ctx)
+        val sourceColumn = predicate.operand.columnRef()
+        val operand = renderOperand(predicate.operand, ctx, sourceColumn)
         if (predicate.values.isEmpty()) {
             // SQL IN () is invalid; for empty list emit a tautology that yields no rows
             // (or all rows if negated). This avoids dialect-specific NULL pitfalls.
             return if (predicate.negated) "1 = 1" else "1 = 0"
         }
         val placeholders = predicate.values.joinToString(", ") { v ->
-            ctx.bind(v as V?, predicate.codec)
+            ctx.bind(v as V?, predicate.codec, sourceColumn)
         }
         val op = if (predicate.negated) "NOT IN" else "IN"
         return "$operand $op ($placeholders)"
     }
 
     private fun <V> renderBetween(predicate: Predicate.Between<V>, ctx: RenderContext): String {
-        val operand = renderOperand(predicate.operand, ctx)
-        val lo = ctx.bind(predicate.lower, predicate.codec)
-        val hi = ctx.bind(predicate.upper, predicate.codec)
+        val sourceColumn = predicate.operand.columnRef()
+        val operand = renderOperand(predicate.operand, ctx, sourceColumn)
+        val lo = ctx.bind(predicate.lower, predicate.codec, sourceColumn)
+        val hi = ctx.bind(predicate.upper, predicate.codec, sourceColumn)
         return "$operand BETWEEN $lo AND $hi"
     }
 
     @Suppress("UNCHECKED_CAST")
-    fun renderOperand(operand: Operand, ctx: RenderContext): String = when (operand) {
+    fun renderOperand(operand: Operand, ctx: RenderContext, column: com.aggitech.aggo.schema.Column<*, *>? = null): String = when (operand) {
         is Operand.Col<*, *> -> {
             val col = operand.column
             "${ctx.dialect.quoteIdentifier(col.table.name)}.${ctx.dialect.quoteIdentifier(col.name)}"
@@ -65,7 +72,10 @@ internal object PredicateRenderer {
         is Operand.Literal<*> -> {
             // Cast is safe: Operand.Literal pairs value with the matching codec.
             val raw = operand as Operand.Literal<Any?>
-            ctx.bind(raw.value, raw.codec as Codec<Any?>)
+            ctx.bind(raw.value, raw.codec as Codec<Any?>, column)
         }
     }
+
+    private fun Operand.columnRef(): com.aggitech.aggo.schema.Column<*, *>? =
+        (this as? Operand.Col<*, *>)?.column
 }

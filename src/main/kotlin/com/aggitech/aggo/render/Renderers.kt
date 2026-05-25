@@ -10,8 +10,13 @@ import com.aggitech.aggo.query.Update
 import com.aggitech.aggo.schema.Codec
 import com.aggitech.aggo.schema.Column
 
-/** Render a SELECT — currently `SELECT * FROM table [WHERE ...] [ORDER BY ...] [LIMIT/OFFSET]`. */
-fun renderSelect(query: Select<*>, dialect: SqlDialect): RenderedSql {
+/**
+ * Render a SELECT — `SELECT col, col FROM table [WHERE ...] [ORDER BY ...] [LIMIT/OFFSET]`.
+ *
+ * [limitOverride] (P-3) lets [com.aggitech.aggo.runtime.Session.fetchOne]
+ * force `LIMIT 1` without allocating a `Select.copy(limit = 1)`.
+ */
+fun renderSelect(query: Select<*>, dialect: SqlDialect, limitOverride: Int? = null): RenderedSql {
     val ctx = RenderContext(dialect)
     val table = dialect.quoteIdentifier(query.table.name)
 
@@ -19,7 +24,11 @@ fun renderSelect(query: Select<*>, dialect: SqlDialect): RenderedSql {
         .joinToString(", ") { dialect.quoteIdentifier(it.name) }
         .ifEmpty { "*" }
 
-    val sql = buildString {
+    // P-1: estimate ~64 base + 16 chars per column + 24 per param slot.
+    val estimate = 64 + columns.length + query.table.columns.size * 16
+    val effectiveLimit = limitOverride ?: query.limit
+
+    val sql = buildString(estimate) {
         append("SELECT ").append(columns)
         append(" FROM ").append(table)
 
@@ -33,7 +42,7 @@ fun renderSelect(query: Select<*>, dialect: SqlDialect): RenderedSql {
                 "$col ${o.direction.name}"
             })
         }
-        query.limit?.let { append(" LIMIT ").append(it) }
+        if (effectiveLimit != null) append(" LIMIT ").append(effectiveLimit)
         query.offset?.let { append(" OFFSET ").append(it) }
     }
 
@@ -78,7 +87,8 @@ fun renderInsert(query: Insert<*>, dialect: SqlDialect, returningPk: Boolean = f
     val cols = query.assignments.joinToString(", ") { dialect.quoteIdentifier(it.column.name) }
     val placeholders = query.assignments.joinToString(", ") { bindAssignment(it, ctx) }
 
-    val sql = buildString {
+    // P-1: rough size estimate
+    val sql = buildString(48 + table.length + cols.length + placeholders.length) {
         append("INSERT INTO ").append(table)
         append(" (").append(cols).append(")")
         append(" VALUES (").append(placeholders).append(")")
@@ -101,7 +111,7 @@ fun renderUpdate(query: Update<*>, dialect: SqlDialect): RenderedSql {
         "${dialect.quoteIdentifier(a.column.name)} = ${bindAssignment(a, ctx)}"
     }
 
-    val sql = buildString {
+    val sql = buildString(32 + table.length + setClause.length) {
         append("UPDATE ").append(table).append(" SET ").append(setClause)
         query.where?.let {
             append(" WHERE ").append(PredicateRenderer.render(it, ctx))
@@ -114,7 +124,7 @@ fun renderDelete(query: Delete<*>, dialect: SqlDialect): RenderedSql {
     val ctx = RenderContext(dialect)
     val table = dialect.quoteIdentifier(query.table.name)
 
-    val sql = buildString {
+    val sql = buildString(32 + table.length) {
         append("DELETE FROM ").append(table)
         query.where?.let {
             append(" WHERE ").append(PredicateRenderer.render(it, ctx))
@@ -125,7 +135,7 @@ fun renderDelete(query: Delete<*>, dialect: SqlDialect): RenderedSql {
 
 @Suppress("UNCHECKED_CAST")
 private fun <V> bindAssignment(a: Assignment<*, V>, ctx: RenderContext): String =
-    ctx.bind(a.value, a.codec as Codec<V>)
+    ctx.bind(a.value, a.codec as Codec<V>, a.column)
 
 private fun renderQualifiedColumn(column: Column<*, *>, dialect: SqlDialect): String =
     "${dialect.quoteIdentifier(column.table.name)}.${dialect.quoteIdentifier(column.name)}"

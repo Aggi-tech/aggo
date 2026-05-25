@@ -1,15 +1,12 @@
 package com.aggitech.aggo
 
-import com.aggitech.aggo.dsl.delete
 import com.aggitech.aggo.dsl.eq
-import com.aggitech.aggo.dsl.insert
 import com.aggitech.aggo.dsl.leftJoin
 import com.aggitech.aggo.dsl.orderBy
-import com.aggitech.aggo.dsl.select
-import com.aggitech.aggo.dsl.update
 import com.aggitech.aggo.dsl.where
 import com.aggitech.aggo.runtime.Aggo
 import com.aggitech.aggo.runtime.AggoPool
+import com.aggitech.aggo.runtime.AggoUnsafe
 import com.aggitech.aggo.runtime.PoolConfig
 import com.aggitech.aggo.runtime.PostgresConfig
 import io.kotest.assertions.throwables.shouldThrow
@@ -22,7 +19,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import org.testcontainers.DockerClientFactory
 import org.testcontainers.containers.PostgreSQLContainer
-import java.time.Instant
 
 /**
  * Verifica empiricamente em Postgres real (Testcontainers) os bugs do AggORM original
@@ -33,8 +29,11 @@ import java.time.Instant
  *   - C-5/C-6: insertReturning devolve PK tipada
  *   - C-13: bind de @JvmInline value class
  *
+ * 0.2.0 — todos os call sites migrados para a API receiver-style.
+ *
  * Pulado automaticamente se Docker não estiver disponível.
  */
+@OptIn(AggoUnsafe::class)
 class IntegrationTest : StringSpec({
 
     val dockerAvailable = DockerClientFactory.instance().isDockerAvailable
@@ -65,8 +64,8 @@ class IntegrationTest : StringSpec({
         )
 
         runBlocking {
-            aggo.read { session ->
-                session.executeRaw(
+            aggo.read {
+                executeRaw(
                     """
                     CREATE TABLE people (
                         id          SERIAL PRIMARY KEY,
@@ -77,7 +76,7 @@ class IntegrationTest : StringSpec({
                     )
                     """.trimIndent()
                 )
-                session.executeRaw(
+                executeRaw(
                     """
                     CREATE TABLE pets (
                         id          SERIAL PRIMARY KEY,
@@ -97,56 +96,44 @@ class IntegrationTest : StringSpec({
     }
 
     "SELECT multi-row works (C-3, C-4)".config(enabledIf = { dockerAvailable }) {
-        aggo.tx { session ->
-            session.insert(insert(People) {
+        aggo.tx {
+            insert(People) {
                 People.email setTo Email("a@a"); People.fullName setTo "A"; People.active setTo true
-            })
-            session.insert(insert(People) {
+            }
+            insert(People) {
                 People.email setTo Email("b@b"); People.fullName setTo "B"; People.active setTo true
-            })
-            session.insert(insert(People) {
+            }
+            insert(People) {
                 People.email setTo Email("c@c"); People.fullName setTo "C"; People.active setTo false
-            })
+            }
         }
 
-        val all = aggo.read { it.fetchAll(select(People)) }
+        val all = aggo.fetchAll(People)
         all.size shouldBe 3
         all.map { it.name } shouldBe listOf("A", "B", "C")
 
-        aggo.read { it.delete(delete(People)) }
+        aggo.delete(People)
     }
 
     "LEFT JOIN maps nested objects and keeps right null when there is no match".config(enabledIf = { dockerAvailable }) {
-        val annaId = aggo.tx { session ->
-            session.insertReturning(
-                insert(People) {
-                    People.email setTo Email("anna@pets")
-                    People.fullName setTo "Anna"
-                    People.active setTo true
-                },
-                People.id,
-            )!!
-        }
-        val bobId = aggo.tx { session ->
-            session.insertReturning(
-                insert(People) {
-                    People.email setTo Email("bob@pets")
-                    People.fullName setTo "Bob"
-                    People.active setTo true
-                },
-                People.id,
-            )!!
+        val annaId = aggo.insertReturning(People, People.id) {
+            People.email setTo Email("anna@pets")
+            People.fullName setTo "Anna"
+            People.active setTo true
+        }!!
+        val bobId = aggo.insertReturning(People, People.id) {
+            People.email setTo Email("bob@pets")
+            People.fullName setTo "Bob"
+            People.active setTo true
+        }!!
+
+        aggo.insert(Pets) {
+            Pets.ownerId setTo annaId
+            Pets.petName setTo "Nina"
         }
 
-        aggo.tx { session ->
-            session.insert(insert(Pets) {
-                Pets.ownerId setTo annaId
-                Pets.petName setTo "Nina"
-            })
-        }
-
-        val rows = aggo.read { session ->
-            session.fetchAllJoined(
+        val rows = aggo.read {
+            fetchAllJoined(
                 People.leftJoin(Pets) { People.id eq Pets.ownerId }
                     .where { People.active eq true }
                     .orderBy { People.id.asc() }
@@ -157,97 +144,110 @@ class IntegrationTest : StringSpec({
         rows[0].right?.name shouldBe "Nina"
         rows[1].right shouldBe null
 
-        aggo.read { it.delete(delete(Pets)) }
-        aggo.read { it.delete(delete(People) { where { People.id eq annaId } }) }
-        aggo.read { it.delete(delete(People) { where { People.id eq bobId } }) }
+        aggo.delete(Pets)
+        aggo.delete(People) { where { People.id eq annaId } }
+        aggo.delete(People) { where { People.id eq bobId } }
     }
 
     "tx { ... } rolls back on exception (C-1, C-2)".config(enabledIf = { dockerAvailable }) {
-        val countBefore = aggo.read { it.fetchAll(select(People)).size }
+        val countBefore = aggo.fetchAll(People).size
 
         shouldThrow<IllegalStateException> {
-            aggo.tx { session ->
-                session.insert(insert(People) {
+            aggo.tx {
+                insert(People) {
                     People.email setTo Email("x@x"); People.fullName setTo "X"; People.active setTo true
-                })
-                session.insert(insert(People) {
+                }
+                insert(People) {
                     People.email setTo Email("y@y"); People.fullName setTo "Y"; People.active setTo true
-                })
+                }
                 error("boom — should rollback both inserts")
             }
         }
 
-        val countAfter = aggo.read { it.fetchAll(select(People)).size }
+        val countAfter = aggo.fetchAll(People).size
         countAfter shouldBe countBefore // both inserts rolled back
     }
 
     "insertReturning decodes PK with the column codec (C-5, C-6)".config(enabledIf = { dockerAvailable }) {
-        val newId: Int? = aggo.tx { session ->
-            session.insertReturning(
-                insert(People) {
-                    People.email setTo Email("ret@ret"); People.fullName setTo "Ret"; People.active setTo true
-                },
-                People.id,
-            )
+        val newId: Int? = aggo.insertReturning(People, People.id) {
+            People.email setTo Email("ret@ret"); People.fullName setTo "Ret"; People.active setTo true
         }
         newId shouldNotBe null
         (newId!! > 0) shouldBe true
 
-        aggo.read { it.delete(delete(People) { where { People.id eq newId } }) }
+        aggo.delete(People) { where { People.id eq newId } }
     }
 
     "ValueClassCodec round-trips through bind + decode (C-13)".config(enabledIf = { dockerAvailable }) {
-        aggo.tx { session ->
-            session.insert(insert(People) {
-                People.email setTo Email("vc@vc"); People.fullName setTo "VC"; People.active setTo true
-            })
+        aggo.insert(People) {
+            People.email setTo Email("vc@vc"); People.fullName setTo "VC"; People.active setTo true
         }
 
-        val list = aggo.read {
-            it.fetchAll(select(People) { where { People.email eq Email("vc@vc") } })
-        }
+        val list = aggo.fetchAll(People) { where { People.email eq Email("vc@vc") } }
         list.size shouldBe 1
         list[0].email shouldBe Email("vc@vc")
 
-        aggo.read { it.delete(delete(People) { where { People.email eq Email("vc@vc") } }) }
+        aggo.delete(People) { where { People.email eq Email("vc@vc") } }
     }
 
     "update returns affected rows".config(enabledIf = { dockerAvailable }) {
-        aggo.tx { session ->
-            session.insert(insert(People) {
-                People.email setTo Email("u@u"); People.fullName setTo "U"; People.active setTo true
-            })
+        aggo.insert(People) {
+            People.email setTo Email("u@u"); People.fullName setTo "U"; People.active setTo true
         }
 
-        val affected = aggo.read {
-            it.update(update(People) {
-                People.active setTo false
-                where { People.email eq Email("u@u") }
-            })
+        val affected = aggo.update(People) {
+            People.active setTo false
+            where { People.email eq Email("u@u") }
         }
         affected shouldBe 1L
 
-        aggo.read { it.delete(delete(People) { where { People.email eq Email("u@u") } }) }
+        aggo.delete(People) { where { People.email eq Email("u@u") } }
+    }
+
+    "one-shot update and tx { update } produce the same row state".config(enabledIf = { dockerAvailable }) {
+        aggo.insert(People) {
+            People.email setTo Email("eq@eq"); People.fullName setTo "Eq"; People.active setTo true
+        }
+
+        val viaShortcut = aggo.update(People) {
+            People.active setTo false
+            where { People.email eq Email("eq@eq") }
+        }
+
+        val viaTx = aggo.tx {
+            update(People) {
+                People.active setTo true
+                where { People.email eq Email("eq@eq") }
+            }
+        }
+
+        viaShortcut shouldBe 1L
+        viaTx shouldBe 1L
+
+        val row = aggo.fetchOne(People) { where { People.email eq Email("eq@eq") } }!!
+        row.active shouldBe true
+
+        aggo.delete(People) { where { People.email eq Email("eq@eq") } }
     }
 
     "pool handles many concurrent coroutines without exhausting".config(enabledIf = { dockerAvailable }) {
         // Seed
-        aggo.tx { session ->
+        aggo.tx {
             repeat(20) { i ->
-                session.insert(insert(People) {
+                insert(People) {
                     People.email setTo Email("p$i@p"); People.fullName setTo "P$i"; People.active setTo true
-                })
+                }
             }
         }
 
         val concurrent = 50
         val sizes = coroutineScope {
             (1..concurrent).map {
-                async { aggo.read { it.fetchAll(select(People)).size } }
+                async { aggo.fetchAll(People).size }
             }.awaitAll()
         }
         sizes.distinct() shouldBe listOf(20)
 
-        aggo.read { it.delete(delete(People)) }
+        aggo.delete(People)
     }
 })

@@ -14,11 +14,17 @@ interface SqlDialect {
 }
 
 /** Strict identifier allowlist: letters, digits, underscore; must start with letter/underscore. */
-internal val IDENTIFIER_REGEX = Regex("^[A-Za-z_][A-Za-z0-9_]*$")
+val IDENTIFIER_REGEX = Regex("^[A-Za-z_][A-Za-z0-9_]*$")
 
-internal const val MAX_IDENTIFIER_LENGTH = 63 // Postgres NAMEDATALEN-1
+const val MAX_IDENTIFIER_LENGTH = 63 // Postgres NAMEDATALEN-1
 
-internal fun requireValidIdentifier(name: String) {
+/**
+ * Validate that [name] is safe to interpolate into a SQL statement. Throws
+ * [IllegalArgumentException] otherwise. Public so the schema layer can fail
+ * fast at [com.aggitech.aggo.schema.Table] / column construction, not at
+ * render time (V-2).
+ */
+fun requireValidIdentifier(name: String) {
     require(name.isNotBlank()) { "identifier must not be blank" }
     require(name.length <= MAX_IDENTIFIER_LENGTH) {
         "identifier '$name' exceeds Postgres NAMEDATALEN ($MAX_IDENTIFIER_LENGTH)"

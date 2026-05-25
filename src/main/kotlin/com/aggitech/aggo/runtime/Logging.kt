@@ -16,11 +16,6 @@ internal object QueryLog {
 
     private val log = LoggerFactory.getLogger("com.aggitech.aggo")
 
-    /** Substrings (case-insensitive) that, when present in a Bound's codec or
-     *  surrounding context, trigger redaction. The list is intentionally short
-     *  — the right place to redact is at the application boundary, not here. */
-    private val SENSITIVE_PATTERNS = listOf("password", "pwd", "secret", "token", "api_key")
-
     fun beforeExecute(sql: String, params: List<Bound>) {
         if (log.isTraceEnabled) {
             log.trace("aggo SQL: {} ; params={}", sql, redact(params))
@@ -34,17 +29,17 @@ internal object QueryLog {
         log.error("aggo SQL failed: {}", sql, t)
     }
 
-    private fun redact(params: List<Bound>): List<Any?> = params.map { bound ->
-        val v = bound.value
+    /**
+     * V-6: redaction is column-driven. A bind attributable to a column with
+     * `sensitive = true` is masked; literal predicates with no column
+     * attribution are surfaced verbatim because the schema is the only place
+     * that legitimately knows whether a value is PII.
+     */
+    internal fun redact(params: List<Bound>): List<Any?> = params.map { bound ->
         when {
-            v == null -> null
-            v is String && looksSensitive(v) -> "<redacted>"
-            else -> v
+            bound.value == null -> null
+            bound.column?.sensitive == true -> "<redacted>"
+            else -> bound.value
         }
-    }
-
-    private fun looksSensitive(value: String): Boolean {
-        val low = value.lowercase()
-        return SENSITIVE_PATTERNS.any { low.contains(it) }
     }
 }

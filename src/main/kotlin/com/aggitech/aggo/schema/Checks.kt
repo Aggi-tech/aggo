@@ -95,10 +95,18 @@ object Checks {
     /**
      * TSID (Time-Sorted ID) format constraint.
      * Matches exactly 13 uppercase Crockford base-32 characters as produced by
-     * `io.hypersistence:tsid-creator` and validated by `TSID.isValid()`.
+     * [com.aggitech.aggo.schema.ids.Tsid.generate].
      */
     fun tsid(): (String) -> String = { col ->
         "char_length(\"$col\") = 13 AND \"$col\" ~ '^[0-9A-HJKMNP-TV-Z]{13}$'"
+    }
+
+    /**
+     * ULID format constraint — 26 chars, Crockford base-32 (no I/L/O/U).
+     * Matches values produced by [com.aggitech.aggo.schema.ids.Ulid.generate].
+     */
+    fun ulid(): (String) -> String = { col ->
+        "char_length(\"$col\") = 26 AND \"$col\" ~ '^[0-9A-HJKMNP-TV-Z]{26}$'"
     }
 
     /**

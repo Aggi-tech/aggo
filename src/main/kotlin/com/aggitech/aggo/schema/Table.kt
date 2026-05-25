@@ -1,5 +1,6 @@
 package com.aggitech.aggo.schema
 
+import com.aggitech.aggo.dialect.requireValidIdentifier
 import io.r2dbc.spi.Row
 
 /**
@@ -10,6 +11,12 @@ import io.r2dbc.spi.Row
  * inspects properties at runtime — every mapping is explicit.
  */
 abstract class Table<E>(val name: String) {
+
+    init {
+        // V-2: fail at object-init, not at first render — invalid table names
+        // would otherwise blow up far from the declaration site.
+        requireValidIdentifier(name)
+    }
 
     private val mutableColumns: MutableList<Column<E, *>> = mutableListOf()
 
@@ -44,8 +51,15 @@ abstract class Table<E>(val name: String) {
         isGenerated: Boolean = false,
         isNullable: Boolean = false,
         check: ((columnName: String) -> String)? = null,
+        sensitive: Boolean = false,
         getter: (E) -> V?,
     ): Column<E, V> {
+        // V-2: validate before mutating mutableColumns so a bad name does not
+        // half-register a column. Duplicate-name check protects fromRow().
+        requireValidIdentifier(name)
+        require(mutableColumns.none { it.name == name }) {
+            "duplicate column '${this.name}.$name'"
+        }
         val col = Column(
             table = this,
             name = name,
@@ -55,6 +69,7 @@ abstract class Table<E>(val name: String) {
             isGenerated = isGenerated,
             isNullable = isNullable,
             checkExpression = check,
+            sensitive = sensitive,
         )
         mutableColumns += col
         return col
