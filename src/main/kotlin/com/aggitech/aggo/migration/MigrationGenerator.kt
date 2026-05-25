@@ -100,6 +100,7 @@ data class MigrationPlan(
     val fromVersion: String?,
     val toVersion: String,
     val steps: List<MigrationStep>,
+    val checksum: String? = null,
 ) {
     init {
         fromVersion?.let {
@@ -176,7 +177,7 @@ fun migrationPlan(
             )
         }
     } else {
-        diffSchemas(previous, current, dialect)
+        diffSchemas(previous, current, dialect, ifNotExists)
     }
     return MigrationPlan(previous?.version, current.version, steps)
 }
@@ -264,6 +265,7 @@ private fun diffSchemas(
     previous: MigrationSchema,
     current: MigrationSchema,
     dialect: MigrationDialect,
+    ifNotExists: Boolean = false,
 ): List<MigrationStep> {
     val steps = mutableListOf<MigrationStep>()
     val previousTables = previous.tables.associateBy { it.name }
@@ -274,7 +276,7 @@ private fun diffSchemas(
         if (oldTable == null) {
             steps += MigrationStep(
                 change = "create table ${table.name}",
-                sql = table.createTableSql(dialect),
+                sql = table.createTableSql(dialect, ifNotExists = ifNotExists),
             )
         } else {
             steps += diffTable(oldTable, table, dialect)

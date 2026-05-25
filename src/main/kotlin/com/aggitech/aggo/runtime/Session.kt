@@ -5,8 +5,10 @@ import com.aggitech.aggo.dsl.DeleteBuilder
 import com.aggitech.aggo.dsl.InsertBuilder
 import com.aggitech.aggo.dsl.SelectBuilder
 import com.aggitech.aggo.dsl.UpdateBuilder
+import com.aggitech.aggo.migration.MigrationFileEntry
 import com.aggitech.aggo.migration.MigrationPlan
 import com.aggitech.aggo.migration.MigrationStep
+import com.aggitech.aggo.migration.computeChecksum
 import com.aggitech.aggo.query.Delete
 import com.aggitech.aggo.query.Insert
 import com.aggitech.aggo.query.JoinSelect
@@ -281,16 +283,22 @@ class Session internal constructor(
                 manualSteps.joinToString { it.change }
         }
 
-        executeMigrationSql(
-            """
-            CREATE TABLE IF NOT EXISTS "aggo_schema_versions" (
-                "version" TEXT PRIMARY KEY,
-                "previous_version" TEXT,
-                "description" TEXT NOT NULL,
-                "applied_at" TIMESTAMPTZ NOT NULL DEFAULT now()
-            );
-            """.trimIndent(),
-        )
+        ensureVersionTable()
+
+        if (queryLong("SELECT COUNT(*) FROM \"aggo_schema_versions\" WHERE \"version\" = ${sqlLiteral(plan.toVersion)}") > 0L) {
+            return MigrationResult(
+                fromVersion = plan.fromVersion,
+                toVersion = plan.toVersion,
+                statementsExecuted = 0,
+                skipped = true,
+            )
+        }
+
+        plan.fromVersion?.let { from ->
+            require(queryLong("SELECT COUNT(*) FROM \"aggo_schema_versions\" WHERE \"version\" = ${sqlLiteral(from)}") > 0L) {
+                "migration ${plan.toVersion} requires '$from' to be applied first"
+            }
+        }
 
         var executed = 0
         for (step in plan.steps) {
@@ -300,9 +308,10 @@ class Session internal constructor(
         }
 
         executeMigrationSql(
-            "INSERT INTO \"aggo_schema_versions\" (\"version\", \"previous_version\", \"description\") " +
+            "INSERT INTO \"aggo_schema_versions\" (\"version\", \"previous_version\", \"description\", \"checksum\") " +
                 "VALUES (${sqlLiteral(plan.toVersion)}, ${sqlNullableLiteral(plan.fromVersion)}, " +
-                "${sqlLiteral(plan.steps.joinToString("; ") { it.change })});",
+                "${sqlLiteral(plan.steps.joinToString("; ") { it.change })}, " +
+                "${sqlNullableLiteral(plan.checksum)});",
         )
 
         return MigrationResult(
@@ -310,6 +319,56 @@ class Session internal constructor(
             toVersion = plan.toVersion,
             statementsExecuted = executed,
         )
+    }
+
+    /**
+     * Applies all migration file entries that have not yet been recorded in
+     * `aggo_schema_versions`, in the order they are provided. Verifies the
+     * checksum of each entry before executing its SQL.
+     *
+     * Call this inside [Aggo.tx] (or use [Aggo.applyMigrations]) so all DDL
+     * and version records commit atomically.
+     */
+    suspend fun applyMigrations(entries: List<MigrationFileEntry>): List<MigrationResult> {
+        ensureVersionTable()
+        val results = mutableListOf<MigrationResult>()
+        for (entry in entries) {
+            if (queryLong("SELECT COUNT(*) FROM \"aggo_schema_versions\" WHERE \"version\" = ${sqlLiteral(entry.version)}") > 0L) {
+                results += MigrationResult(
+                    fromVersion = entry.fromVersion,
+                    toVersion = entry.version,
+                    statementsExecuted = 0,
+                    skipped = true,
+                )
+                continue
+            }
+
+            val computed = computeChecksum(entry.sql, entry.generatedAt)
+            check(computed == entry.checksum) {
+                "Checksum mismatch for migration ${entry.version}: stored=${entry.checksum} computed=$computed"
+            }
+
+            entry.fromVersion?.let { from ->
+                require(queryLong("SELECT COUNT(*) FROM \"aggo_schema_versions\" WHERE \"version\" = ${sqlLiteral(from)}") > 0L) {
+                    "migration ${entry.version} requires '$from' to be applied first"
+                }
+            }
+
+            executeMigrationSql(entry.sql)
+
+            executeMigrationSql(
+                "INSERT INTO \"aggo_schema_versions\" (\"version\", \"previous_version\", \"description\", \"checksum\") " +
+                    "VALUES (${sqlLiteral(entry.version)}, ${sqlNullableLiteral(entry.fromVersion)}, " +
+                    "${sqlLiteral("file-based migration")}, ${sqlLiteral(entry.checksum)});",
+            )
+
+            results += MigrationResult(
+                fromVersion = entry.fromVersion,
+                toVersion = entry.version,
+                statementsExecuted = 1,
+            )
+        }
+        return results
     }
 
     // ----- internals ------------------------------------------------------
@@ -336,6 +395,39 @@ class Session internal constructor(
         Binder.bind(statement, rendered.params)
         QueryLog.beforeExecute(rendered.sql, rendered.params)
         return statement.execute()
+    }
+
+    private suspend fun ensureVersionTable() {
+        executeMigrationSql(
+            """
+            CREATE TABLE IF NOT EXISTS "aggo_schema_versions" (
+                "version" TEXT PRIMARY KEY,
+                "previous_version" TEXT,
+                "description" TEXT NOT NULL,
+                "applied_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+                "checksum" TEXT
+            );
+            """.trimIndent(),
+        )
+        executeMigrationSql(
+            "ALTER TABLE \"aggo_schema_versions\" ADD COLUMN IF NOT EXISTS \"checksum\" TEXT;",
+        )
+    }
+
+    private suspend fun queryLong(sql: String): Long {
+        QueryLog.beforeExecute(sql, emptyList())
+        val statement = connection.createStatement(sql)
+        return try {
+            var result = 0L
+            statement.execute().asResultFlow().collect { r ->
+                val pub: Publisher<Long?> = r.map { row, _ -> row.get(0, Long::class.javaObjectType) }
+                pub.collect { v -> result += v ?: 0L }
+            }
+            result
+        } catch (t: Throwable) {
+            QueryLog.onError(sql, t)
+            throw t
+        }
     }
 
     private suspend fun executeMigrationSql(sql: String): Long {
@@ -399,6 +491,7 @@ data class MigrationResult(
     val fromVersion: String?,
     val toVersion: String,
     val statementsExecuted: Int,
+    val skipped: Boolean = false,
 )
 
 private fun sqlNullableLiteral(value: String?): String =

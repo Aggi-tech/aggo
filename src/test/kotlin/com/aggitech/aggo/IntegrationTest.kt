@@ -5,6 +5,8 @@ import com.aggitech.aggo.dsl.leftJoin
 import com.aggitech.aggo.dsl.orderBy
 import com.aggitech.aggo.dsl.where
 import com.aggitech.aggo.dialect.PostgresDialect
+import com.aggitech.aggo.migration.MigrationFileEntry
+import com.aggitech.aggo.migration.computeChecksum
 import com.aggitech.aggo.migration.migrationPlan
 import com.aggitech.aggo.migration.migrationSchema
 import com.aggitech.aggo.runtime.Aggo
@@ -27,6 +29,7 @@ import kotlinx.coroutines.runBlocking
 import io.r2dbc.spi.Row
 import org.testcontainers.DockerClientFactory
 import org.testcontainers.containers.PostgreSQLContainer
+import java.nio.file.Files
 import java.time.Instant
 
 private object MigrationSmokeTable : Table<Unit>("migration_smoke") {
@@ -285,6 +288,66 @@ class IntegrationTest : StringSpec({
         row.active shouldBe true
 
         aggo.delete(People) { where { People.email eq Email("eq@eq") } }
+    }
+
+    "applyMigration is idempotent — second call returns skipped=true".config(enabledIf = { dockerAvailable }) {
+        val schema = migrationSchema("2026.05.25.idempotency", listOf(MigrationSmokeTable), PostgresDialect)
+        val plan = migrationPlan(schema, PostgresDialect, ifNotExists = true)
+
+        val first = aggo.applyMigration(plan)
+        first.skipped shouldBe false
+        first.statementsExecuted shouldBe 1
+
+        val second = aggo.applyMigration(plan)
+        second.skipped shouldBe true
+        second.statementsExecuted shouldBe 0
+    }
+
+    "applyMigration rejects migration when fromVersion prerequisite is not applied".config(enabledIf = { dockerAvailable }) {
+        val previous = migrationSchema("2026.05.25.never-applied", listOf(MigrationSmokeTable), PostgresDialect)
+        val current = migrationSchema("2026.05.25.depends-on-missing", listOf(MigrationSmokeTable), PostgresDialect)
+        val plan = migrationPlan(current, PostgresDialect, previous = previous, ifNotExists = true)
+
+        shouldThrow<IllegalArgumentException> {
+            aggo.applyMigration(plan)
+        }.message!!.let { msg ->
+            msg shouldBe "migration 2026.05.25.depends-on-missing requires '2026.05.25.never-applied' to be applied first"
+        }
+    }
+
+    "applyMigrations applies all files and skips applied on re-run".config(enabledIf = { dockerAvailable }) {
+        val dir = Files.createTempDirectory("aggo-it-migrations")
+        val sql = "SELECT 1;"
+        val at = Instant.now()
+        val entries = listOf(
+            MigrationFileEntry("2026.05.25.it-file-001", null, at, computeChecksum(sql, at), sql),
+            MigrationFileEntry("2026.05.25.it-file-002", "2026.05.25.it-file-001", at, computeChecksum(sql, at), sql),
+        )
+
+        val results = aggo.tx { applyMigrations(entries) }
+        results.map { it.skipped } shouldBe listOf(false, false)
+        results.map { it.statementsExecuted } shouldBe listOf(1, 1)
+
+        val results2 = aggo.tx { applyMigrations(entries) }
+        results2.map { it.skipped } shouldBe listOf(true, true)
+    }
+
+    "applyMigrations throws on checksum mismatch".config(enabledIf = { dockerAvailable }) {
+        val at = Instant.now()
+        val realSql = "SELECT 1;"
+        val tamperedSql = "SELECT 2;"
+        val entry = MigrationFileEntry(
+            version = "2026.05.25.it-tampered",
+            fromVersion = null,
+            generatedAt = at,
+            checksum = computeChecksum(realSql, at),
+            sql = tamperedSql,
+        )
+        shouldThrow<IllegalStateException> {
+            aggo.tx { applyMigrations(listOf(entry)) }
+        }.message!!.let { msg ->
+            msg shouldBe "Checksum mismatch for migration 2026.05.25.it-tampered: stored=${computeChecksum(realSql, at)} computed=${computeChecksum(tamperedSql, at)}"
+        }
     }
 
     "pool handles many concurrent coroutines without exhausting".config(enabledIf = { dockerAvailable }) {

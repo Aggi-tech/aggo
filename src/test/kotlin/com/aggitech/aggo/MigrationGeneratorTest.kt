@@ -213,4 +213,13 @@ class MigrationGeneratorTest : StringSpec({
         plan.steps[1].change shouldBe "add non-null column users.age"
         plan.steps[1].requiresManualMigration shouldBe true
     }
+
+    "migrationPlan diff with ifNotExists=true uses CREATE TABLE IF NOT EXISTS for new tables" {
+        val previous = migrationSchema("v1", listOf(TagsTable), PostgresDialect)
+        val current = migrationSchema("v2", listOf(TagsTable, AccountsTable), PostgresDialect)
+        val plan = migrationPlan(current, PostgresDialect, previous = previous, ifNotExists = true)
+
+        val createStep = plan.steps.first { it.change == "create table accounts" }
+        createStep.sql!! shouldStartWith "CREATE TABLE IF NOT EXISTS"
+    }
 })
