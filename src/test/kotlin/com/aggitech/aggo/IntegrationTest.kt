@@ -48,6 +48,11 @@ class IntegrationTest : StringSpec({
             .withDatabaseName("aggo")
             .withUsername("aggo")
             .withPassword("aggo")
+            // r2dbc-postgresql 1.0.x still links against ongres-scram 2.x for
+            // SCRAM auth. Keep the vulnerable SCRAM common artifact off the
+            // classpath and use md5 auth in the test-only Postgres container.
+            .withEnv("POSTGRES_HOST_AUTH_METHOD", "md5")
+            .withCommand("postgres", "-c", "password_encryption=md5")
         pg.start()
 
         aggo = Aggo(
