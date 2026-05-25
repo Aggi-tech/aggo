@@ -4,6 +4,7 @@ import com.aggitech.aggo.dsl.DeleteBuilder
 import com.aggitech.aggo.dsl.InsertBuilder
 import com.aggitech.aggo.dsl.SelectBuilder
 import com.aggitech.aggo.dsl.UpdateBuilder
+import com.aggitech.aggo.migration.MigrationPlan
 import com.aggitech.aggo.query.Select
 import com.aggitech.aggo.schema.Column
 import com.aggitech.aggo.schema.Table
@@ -153,24 +154,17 @@ import kotlinx.coroutines.withContext
  *
  * ## 7 — Generate migrations
  *
- * Table descriptors can generate `CREATE TABLE` DDL automatically:
+ * Table descriptors can generate and Aggo can apply versioned migration plans:
  *
  * ```kotlin
  * import com.aggitech.aggo.dialect.PostgresDialect
- * import com.aggitech.aggo.migration.createTableSql
- * import com.aggitech.aggo.migration.dropTableSql
+ * import com.aggitech.aggo.migration.migrationPlan
+ * import com.aggitech.aggo.migration.migrationSchema
  *
- * println(UsersTable.createTableSql(PostgresDialect, ifNotExists = true))
- * // CREATE TABLE IF NOT EXISTS "users" (
- * //     "id" TEXT NOT NULL,
- * //     "email" TEXT NOT NULL,
- * //     ...
- * //     CONSTRAINT chk_users_id CHECK (...),
- * //     PRIMARY KEY ("id")
- * // );
+ * val schema = migrationSchema("2026.05.25.001", listOf(UsersTable), PostgresDialect)
+ * val plan = migrationPlan(schema, PostgresDialect)
  *
- * // Or generate ALTER TABLE statements for existing tables (add to Liquibase migration):
- * UsersTable.addCheckConstraintsSql().forEach(::println)
+ * aggo.applyMigration(plan)
  * ```
  *
  * @see Session for the full query API available inside [read] and [tx] blocks
@@ -311,6 +305,13 @@ class Aggo(private val pool: AggoPool) : AutoCloseable {
      */
     suspend fun <E> delete(table: Table<E>, block: DeleteBuilder<E>.() -> Unit = {}): Long =
         tx { delete(table, block) }
+
+    /**
+     * Applies an Aggo-generated migration plan in a transaction and records the
+     * applied schema version in `aggo_schema_versions`.
+     */
+    suspend fun applyMigration(plan: MigrationPlan): MigrationResult =
+        tx { applyMigration(plan) }
 
     override fun close() = pool.close()
 }

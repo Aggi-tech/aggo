@@ -29,6 +29,7 @@
 | 3 | [spec-3-ulid-tsid.md](spec-3-ulid-tsid.md) | Built-in ULID/TSID generator + codecs + `Checks.ulid()`. |
 | 4 | [spec-4-dependency-slim-down.md](spec-4-dependency-slim-down.md) | Dep audit, BOM, SCRAM pin path. |
 | 5 | [spec-5-performance.md](spec-5-performance.md) | Pre-sized `StringBuilder`, `fetchOne` allocation cut, statement cache. |
+| 6 | [spec-6-migrations.md](spec-6-migrations.md) | Aggo-owned migration generation, diffing, execution, and schema versioning. |
 
 ## 4. Semver decision
 

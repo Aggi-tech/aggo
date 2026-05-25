@@ -138,8 +138,9 @@ object UsersTable : Table<User>("users") {
     )
 }
 
-// Generate Liquibase migration SQL for existing tables:
-// UsersTable.addCheckConstraintsSql().forEach(::println)
+// Generate and apply an Aggo-owned migration plan:
+// val schema = migrationSchema("2026.05.25.001", listOf(UsersTable), PostgresDialect)
+// aggo.applyMigration(migrationPlan(schema, PostgresDialect))
 ```
 
 ---
@@ -158,9 +159,9 @@ do this automatically using `"$col"`.
 UsersTable.checkConstraintClauses()
 // → ["CONSTRAINT chk_users_id CHECK (char_length(\"id\") = 13 AND ...)", ...]
 
-// ALTER TABLE statements for existing tables (paste into Liquibase migration):
-UsersTable.addCheckConstraintsSql()
-// → ["ALTER TABLE \"users\" ADD CONSTRAINT chk_users_id CHECK (...);", ...]
+// ALTER TABLE statements for existing tables:
+UsersTable.addCheckConstraintsSql(PostgresDialect)
+// → ["ALTER TABLE \"users\" ADD CONSTRAINT \"chk_users_id\" CHECK (...);", ...]
 ```
 
 **Available Checks helpers:**

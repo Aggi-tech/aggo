@@ -88,9 +88,10 @@ abstract class Table<E>(val name: String) {
         }
 
     /**
-     * Returns ready-to-run `ALTER TABLE … ADD CONSTRAINT …` statements for all
-     * columns with a [check] expression. Paste these into a Liquibase migration
-     * when adding constraints to an existing table.
+     * Returns ready-to-run Postgres `ALTER TABLE … ADD CONSTRAINT …` statements
+     * for all columns with a [check] expression. Prefer the dialect-aware
+     * `com.aggitech.aggo.migration.addCheckConstraintsSql(dialect)` overload for
+     * new code.
      *
      * Example output:
      * ```sql

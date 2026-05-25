@@ -125,4 +125,4 @@ No `reflect-config.json` is needed — Aggo contains no reflection.
 - [Querying](03-querying.md) — SELECT, filters, ordering, streaming
 - [Writing Data](04-writes.md) — INSERT, UPDATE, DELETE, transactions
 - [JOIN Queries](05-joins.md) — LEFT JOIN with typed result pairs
-- [Migration Generation](06-migrations.md) — generate CREATE TABLE DDL from your schema
+- [Migration Generation](06-migrations.md) — generate and apply versioned DDL from your schema

@@ -15,8 +15,8 @@ package com.aggitech.aggo.schema
  *     val name  = column("first_name", StringCodec, check = Checks.length(max = 100)) { it.firstName }
  * }
  *
- * // Generate Liquibase migration SQL:
- * PayersTable.addCheckConstraintsSql().forEach(::println)
+ * // Generate migration SQL:
+ * PayersTable.addCheckConstraintsSql(PostgresDialect).forEach(::println)
  * // → ALTER TABLE "payers" ADD CONSTRAINT chk_payers_id CHECK (...);
  * // → ALTER TABLE "payers" ADD CONSTRAINT chk_payers_email CHECK (...);
  * ```

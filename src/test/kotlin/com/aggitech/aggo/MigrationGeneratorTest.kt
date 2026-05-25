@@ -1,8 +1,13 @@
 package com.aggitech.aggo
 
 import com.aggitech.aggo.dialect.PostgresDialect
+import com.aggitech.aggo.migration.MigrationColumn
+import com.aggitech.aggo.migration.MigrationSchema
+import com.aggitech.aggo.migration.MigrationTable
 import com.aggitech.aggo.migration.createTableSql
 import com.aggitech.aggo.migration.dropTableSql
+import com.aggitech.aggo.migration.migrationPlan
+import com.aggitech.aggo.migration.migrationSchema
 import com.aggitech.aggo.schema.BigDecimalCodec
 import com.aggitech.aggo.schema.BooleanCodec
 import com.aggitech.aggo.schema.Checks
@@ -68,7 +73,7 @@ class MigrationGeneratorTest : StringSpec({
             "    \"active\" BOOLEAN NOT NULL,\n" +
             "    \"created_at\" TIMESTAMPTZ NOT NULL,\n" +
             "    \"note\" TEXT,\n" +
-            "    CONSTRAINT chk_accounts_name CHECK (trim(\"name\") <> ''),\n" +
+            "    CONSTRAINT \"chk_accounts_name\" CHECK (trim(\"name\") <> ''),\n" +
             "    PRIMARY KEY (\"id\")\n" +
             ");"
     }
@@ -80,7 +85,7 @@ class MigrationGeneratorTest : StringSpec({
             "    \"order_id\" BIGINT NOT NULL,\n" +
             "    \"product_id\" BIGINT NOT NULL,\n" +
             "    \"qty\" INTEGER NOT NULL,\n" +
-            "    CONSTRAINT chk_order_items_qty CHECK (\"qty\" > 0),\n" +
+            "    CONSTRAINT \"chk_order_items_qty\" CHECK (\"qty\" > 0),\n" +
             "    PRIMARY KEY (\"order_id\", \"product_id\")\n" +
             ");"
     }
@@ -91,7 +96,7 @@ class MigrationGeneratorTest : StringSpec({
         sql shouldBe
             "CREATE TABLE \"tags\" (\n" +
             "    \"name\" TEXT NOT NULL,\n" +
-            "    CONSTRAINT chk_tags_name CHECK (char_length(\"name\") <= 50)\n" +
+            "    CONSTRAINT \"chk_tags_name\" CHECK (char_length(\"name\") <= 50)\n" +
             ");"
     }
 
@@ -133,5 +138,79 @@ class MigrationGeneratorTest : StringSpec({
         shouldThrow<UnsupportedOperationException> {
             UnknownTable.createTableSql(PostgresDialect)
         }
+    }
+
+    "migrationSchema materializes an Aggo-independent snapshot" {
+        val schema = migrationSchema("2026.05.25.001", listOf(AccountsTable), PostgresDialect)
+        val table = schema.tables.single()
+
+        schema.version shouldBe "2026.05.25.001"
+        table.name shouldBe "accounts"
+        table.columns.map { it.name to it.sqlType } shouldBe listOf(
+            "id" to "UUID",
+            "name" to "TEXT",
+            "balance" to "NUMERIC",
+            "active" to "BOOLEAN",
+            "created_at" to "TIMESTAMPTZ",
+            "note" to "TEXT",
+        )
+        table.primaryKey shouldBe listOf("id")
+        table.checks.single().name shouldBe "chk_accounts_name"
+    }
+
+    "migrationPlan without previous schema creates all tables" {
+        val schema = migrationSchema("2026.05.25.001", listOf(TagsTable), PostgresDialect)
+        val plan = migrationPlan(schema, PostgresDialect, ifNotExists = true)
+
+        plan.fromVersion shouldBe null
+        plan.toVersion shouldBe "2026.05.25.001"
+        plan.steps.single().change shouldBe "create table tags"
+        plan.sql() shouldStartWith "CREATE TABLE IF NOT EXISTS"
+    }
+
+    "migrationPlan diff emits additive SQL and marks destructive changes manual" {
+        val previous = migrationSchema("2026.05.25.001", listOf(TagsTable), PostgresDialect)
+        val current = migrationSchema("2026.05.25.002", listOf(AccountsTable), PostgresDialect)
+        val plan = migrationPlan(current, PostgresDialect, previous = previous)
+
+        plan.steps.map { it.change } shouldBe listOf(
+            "create table accounts",
+            "drop table tags",
+        )
+        plan.steps.last().requiresManualMigration shouldBe true
+    }
+
+    "migrationPlan only auto-adds nullable columns on existing tables" {
+        val previous = MigrationSchema(
+            "v1",
+            listOf(
+                MigrationTable(
+                    name = "users",
+                    columns = listOf(MigrationColumn("id", "INTEGER", nullable = false)),
+                    primaryKey = listOf("id"),
+                )
+            ),
+        )
+        val current = MigrationSchema(
+            "v2",
+            listOf(
+                MigrationTable(
+                    name = "users",
+                    columns = listOf(
+                        MigrationColumn("id", "INTEGER", nullable = false),
+                        MigrationColumn("nickname", "TEXT", nullable = true),
+                        MigrationColumn("age", "INTEGER", nullable = false),
+                    ),
+                    primaryKey = listOf("id"),
+                )
+            ),
+        )
+
+        val plan = migrationPlan(current, PostgresDialect, previous = previous)
+
+        plan.steps[0].change shouldBe "add column users.nickname"
+        plan.steps[0].sql shouldBe """ALTER TABLE "users" ADD COLUMN "nickname" TEXT;"""
+        plan.steps[1].change shouldBe "add non-null column users.age"
+        plan.steps[1].requiresManualMigration shouldBe true
     }
 })

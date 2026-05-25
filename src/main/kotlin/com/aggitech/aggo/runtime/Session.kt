@@ -5,6 +5,8 @@ import com.aggitech.aggo.dsl.DeleteBuilder
 import com.aggitech.aggo.dsl.InsertBuilder
 import com.aggitech.aggo.dsl.SelectBuilder
 import com.aggitech.aggo.dsl.UpdateBuilder
+import com.aggitech.aggo.migration.MigrationPlan
+import com.aggitech.aggo.migration.MigrationStep
 import com.aggitech.aggo.query.Delete
 import com.aggitech.aggo.query.Insert
 import com.aggitech.aggo.query.JoinSelect
@@ -263,6 +265,53 @@ class Session internal constructor(
     suspend fun <E> delete(table: Table<E>, block: DeleteBuilder<E>.() -> Unit = {}): Long =
         delete(com.aggitech.aggo.dsl.delete(table, block))
 
+    // ----- migrations -----------------------------------------------------
+
+    /**
+     * Applies an Aggo-generated migration plan on this connection.
+     *
+     * The caller should run this inside [Aggo.tx] or use [Aggo.applyMigration]
+     * so schema changes and version recording commit atomically. Steps marked
+     * [MigrationStep.requiresManualMigration] are refused before any SQL runs.
+     */
+    suspend fun applyMigration(plan: MigrationPlan): MigrationResult {
+        val manualSteps = plan.steps.filter { it.requiresManualMigration }
+        require(manualSteps.isEmpty()) {
+            "migration ${plan.fromVersion ?: "<empty>"} -> ${plan.toVersion} has manual steps: " +
+                manualSteps.joinToString { it.change }
+        }
+
+        executeMigrationSql(
+            """
+            CREATE TABLE IF NOT EXISTS "aggo_schema_versions" (
+                "version" TEXT PRIMARY KEY,
+                "previous_version" TEXT,
+                "description" TEXT NOT NULL,
+                "applied_at" TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+            """.trimIndent(),
+        )
+
+        var executed = 0
+        for (step in plan.steps) {
+            val sql = step.sql ?: continue
+            executeMigrationSql(sql)
+            executed += 1
+        }
+
+        executeMigrationSql(
+            "INSERT INTO \"aggo_schema_versions\" (\"version\", \"previous_version\", \"description\") " +
+                "VALUES (${sqlLiteral(plan.toVersion)}, ${sqlNullableLiteral(plan.fromVersion)}, " +
+                "${sqlLiteral(plan.steps.joinToString("; ") { it.change })});",
+        )
+
+        return MigrationResult(
+            fromVersion = plan.fromVersion,
+            toVersion = plan.toVersion,
+            statementsExecuted = executed,
+        )
+    }
+
     // ----- internals ------------------------------------------------------
 
     private suspend fun executeUpdate(rendered: RenderedSql): Long {
@@ -287,6 +336,21 @@ class Session internal constructor(
         Binder.bind(statement, rendered.params)
         QueryLog.beforeExecute(rendered.sql, rendered.params)
         return statement.execute()
+    }
+
+    private suspend fun executeMigrationSql(sql: String): Long {
+        QueryLog.beforeExecute(sql, emptyList())
+        val statement = connection.createStatement(sql)
+        return try {
+            var total = 0L
+            statement.execute().asResultFlow().collect { result ->
+                total += result.rowsUpdated.awaitFirstOrNull() ?: 0L
+            }
+            total
+        } catch (t: Throwable) {
+            QueryLog.onError(sql, t)
+            throw t
+        }
     }
 
     /**
@@ -330,6 +394,18 @@ class Session internal constructor(
         }
     }
 }
+
+data class MigrationResult(
+    val fromVersion: String?,
+    val toVersion: String,
+    val statementsExecuted: Int,
+)
+
+private fun sqlNullableLiteral(value: String?): String =
+    value?.let(::sqlLiteral) ?: "NULL"
+
+private fun sqlLiteral(value: String): String =
+    "'" + value.replace("'", "''") + "'"
 
 /**
  * Bridge `Publisher<? extends Result>` (which Kotlin sees as `Publisher<out Result>`)

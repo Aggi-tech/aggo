@@ -4,11 +4,18 @@ import com.aggitech.aggo.dsl.eq
 import com.aggitech.aggo.dsl.leftJoin
 import com.aggitech.aggo.dsl.orderBy
 import com.aggitech.aggo.dsl.where
+import com.aggitech.aggo.dialect.PostgresDialect
+import com.aggitech.aggo.migration.migrationPlan
+import com.aggitech.aggo.migration.migrationSchema
 import com.aggitech.aggo.runtime.Aggo
 import com.aggitech.aggo.runtime.AggoPool
 import com.aggitech.aggo.runtime.AggoUnsafe
 import com.aggitech.aggo.runtime.PoolConfig
 import com.aggitech.aggo.runtime.PostgresConfig
+import com.aggitech.aggo.schema.InstantCodec
+import com.aggitech.aggo.schema.IntCodec
+import com.aggitech.aggo.schema.StringCodec
+import com.aggitech.aggo.schema.Table
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe
@@ -17,8 +24,37 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
+import io.r2dbc.spi.Row
 import org.testcontainers.DockerClientFactory
 import org.testcontainers.containers.PostgreSQLContainer
+import java.time.Instant
+
+private object MigrationSmokeTable : Table<Unit>("migration_smoke") {
+    val id = column("id", IntCodec, isPrimaryKey = true) { null }
+    val smokeName = column("name", StringCodec) { null }
+    override fun fromRow(row: Row): Unit = Unit
+}
+
+private data class SchemaVersion(
+    val version: String,
+    val previousVersion: String?,
+    val description: String,
+    val appliedAt: Instant,
+)
+
+private object AggoSchemaVersions : Table<SchemaVersion>("aggo_schema_versions") {
+    val version = column("version", StringCodec, isPrimaryKey = true) { it.version }
+    val previousVersion = column("previous_version", StringCodec, isNullable = true) { it.previousVersion }
+    val description = column("description", StringCodec) { it.description }
+    val appliedAt = column("applied_at", InstantCodec, isGenerated = true) { it.appliedAt }
+
+    override fun fromRow(row: Row): SchemaVersion = SchemaVersion(
+        version = version.readRequired(row),
+        previousVersion = previousVersion.read(row),
+        description = description.readRequired(row),
+        appliedAt = appliedAt.readRequired(row),
+    )
+}
 
 /**
  * Verifica empiricamente em Postgres real (Testcontainers) os bugs do AggORM original
@@ -171,6 +207,22 @@ class IntegrationTest : StringSpec({
 
         val countAfter = aggo.fetchAll(People).size
         countAfter shouldBe countBefore // both inserts rolled back
+    }
+
+    "Aggo applies generated migration plans and records schema version".config(enabledIf = { dockerAvailable }) {
+        val schema = migrationSchema("2026.05.25.integration", listOf(MigrationSmokeTable), PostgresDialect)
+        val plan = migrationPlan(schema, PostgresDialect)
+
+        val result = aggo.applyMigration(plan)
+        result.fromVersion shouldBe null
+        result.toVersion shouldBe schema.version
+        result.statementsExecuted shouldBe 1
+
+        val applied = aggo.fetchOne(AggoSchemaVersions) {
+            where { AggoSchemaVersions.version eq schema.version }
+        }
+        applied?.previousVersion shouldBe null
+        applied?.description shouldBe "create table migration_smoke"
     }
 
     "insertReturning decodes PK with the column codec (C-5, C-6)".config(enabledIf = { dockerAvailable }) {
