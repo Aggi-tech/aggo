@@ -34,19 +34,19 @@ object StringCodec : Codec<String> {
 }
 
 object IntCodec : Codec<Int> {
-    override val sqlType: Class<*> = java.lang.Integer::class.java
+    override val sqlType: Class<*> = Int::class.javaObjectType
     override fun encode(value: Int?): Any? = value
     override fun decode(raw: Any?): Int? = (raw as? Number)?.toInt()
 }
 
 object LongCodec : Codec<Long> {
-    override val sqlType: Class<*> = java.lang.Long::class.java
+    override val sqlType: Class<*> = Long::class.javaObjectType
     override fun encode(value: Long?): Any? = value
     override fun decode(raw: Any?): Long? = (raw as? Number)?.toLong()
 }
 
 object BooleanCodec : Codec<Boolean> {
-    override val sqlType: Class<*> = java.lang.Boolean::class.java
+    override val sqlType: Class<*> = Boolean::class.javaObjectType
     override fun encode(value: Boolean?): Any? = value
     override fun decode(raw: Any?): Boolean? = when (raw) {
         null -> null
@@ -58,7 +58,7 @@ object BooleanCodec : Codec<Boolean> {
 }
 
 object DoubleCodec : Codec<Double> {
-    override val sqlType: Class<*> = java.lang.Double::class.java
+    override val sqlType: Class<*> = Double::class.javaObjectType
     override fun encode(value: Double?): Any? = value
     override fun decode(raw: Any?): Double? = (raw as? Number)?.toDouble()
 }

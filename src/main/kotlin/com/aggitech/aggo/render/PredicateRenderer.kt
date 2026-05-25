@@ -2,7 +2,6 @@ package com.aggitech.aggo.render
 
 import com.aggitech.aggo.query.Operand
 import com.aggitech.aggo.query.Predicate
-import com.aggitech.aggo.schema.Codec
 
 internal object PredicateRenderer {
 
@@ -39,7 +38,6 @@ internal object PredicateRenderer {
         is Predicate.Not -> "NOT (${render(predicate.inner, ctx)})"
     }
 
-    @Suppress("UNCHECKED_CAST")
     private fun <V> renderIn(predicate: Predicate.In<V>, ctx: RenderContext): String {
         val sourceColumn = predicate.operand.columnRef()
         val operand = renderOperand(predicate.operand, ctx, sourceColumn)
@@ -49,7 +47,7 @@ internal object PredicateRenderer {
             return if (predicate.negated) "1 = 1" else "1 = 0"
         }
         val placeholders = predicate.values.joinToString(", ") { v ->
-            ctx.bind(v as V?, predicate.codec, sourceColumn)
+            ctx.bind(v, predicate.codec, sourceColumn)
         }
         val op = if (predicate.negated) "NOT IN" else "IN"
         return "$operand $op ($placeholders)"
@@ -72,7 +70,7 @@ internal object PredicateRenderer {
         is Operand.Literal<*> -> {
             // Cast is safe: Operand.Literal pairs value with the matching codec.
             val raw = operand as Operand.Literal<Any?>
-            ctx.bind(raw.value, raw.codec as Codec<Any?>, column)
+            ctx.bind(raw.value, raw.codec, column)
         }
     }
 

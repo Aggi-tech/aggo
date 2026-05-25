@@ -56,12 +56,11 @@
         <coroutines.version>1.10.2</coroutines.version>
         <r2dbc-spi.version>1.0.0.RELEASE</r2dbc-spi.version>
         <r2dbc-pool.version>1.0.2.RELEASE</r2dbc-pool.version>
-        <r2dbc-postgresql.version>1.0.7.RELEASE</r2dbc-postgresql.version>
+        <r2dbc-postgresql.version>1.1.1.RELEASE</r2dbc-postgresql.version>
         <!-- S-1 (CVE-2025-59432): scram:common:2.1 has a timing side-channel in
              SCRAM authentication (Arrays.equals instead of constant-time compare).
-             In v3.x the library renamed its artifacts: common → scram-common,
-             client → scram-client.  The r2dbc-postgresql dependency is excluded
-             and replaced with the fixed artifacts below. -->
+             r2dbc-postgresql 1.1.x depends on the fixed SCRAM 3.x artifacts:
+             common -> scram-common, client -> scram-client. -->
         <scram.version>3.2</scram.version>
         <slf4j.version>2.0.16</slf4j.version>
 
@@ -69,6 +68,7 @@
         <testcontainers.version>1.20.4</testcontainers.version>
         <junit.version>5.11.4</junit.version>
 
+        <maven-enforcer.version>3.5.0</maven-enforcer.version>
         <surefire.version>3.5.2</surefire.version>
     </properties>
 
@@ -85,10 +85,13 @@
                 <scope>import</scope>
             </dependency>
 
-            <!-- S-1 (CVE-2025-59432): scram-common:3.2 replaces the vulnerable
-                 common:2.1 transitive. The r2dbc-postgresql dependency below
-                 excludes the old artifact; this block pins the renamed replacement.
-                 client:2.1 is not affected — only the common module is patched. -->
+            <!-- S-1 (CVE-2025-59432): keep the driver on the fixed SCRAM 3.x
+                 line and prevent dependency mediation from selecting 2.x. -->
+            <dependency>
+                <groupId>com.ongres.scram</groupId>
+                <artifactId>scram-client</artifactId>
+                <version>${scram.version}</version>
+            </dependency>
             <dependency>
                 <groupId>com.ongres.scram</groupId>
                 <artifactId>scram-common</artifactId>
@@ -121,25 +124,12 @@
             <artifactId>r2dbc-pool</artifactId>
             <version>${r2dbc-pool.version}</version>
         </dependency>
-        <!-- S-1: exclude vulnerable scram:common:2.1 (CVE-2025-59432). The v3.x
-             library renamed the artifact to scram-common; r2dbc-postgresql was
-             compiled against the 2.x API so runtime compatibility must be verified
-             when upgrading r2dbc-postgresql in the future. -->
+        <!-- r2dbc-postgresql 1.1.x is compiled against SCRAM 3.x, avoiding the
+             mixed 2.x/3.x classpath that broke SCRAM auth at runtime. -->
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>r2dbc-postgresql</artifactId>
             <version>${r2dbc-postgresql.version}</version>
-            <exclusions>
-                <exclusion>
-                    <groupId>com.ongres.scram</groupId>
-                    <artifactId>common</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-        <dependency>
-            <groupId>com.ongres.scram</groupId>
-            <artifactId>scram-common</artifactId>
-            <version>${scram.version}</version>
         </dependency>
 
         <dependency>
@@ -217,6 +207,31 @@
                     <execution>
                         <id>test-compile</id>
                         <goals><goal>test-compile</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>${maven-enforcer.version}</version>
+                <executions>
+                    <execution>
+                        <id>ban-vulnerable-scram</id>
+                        <goals><goal>enforce</goal></goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <excludes>
+                                        <!-- CVE-2025-59432 / GHSA-3wfh-36rx-9537 affects SCRAM before 3.2. -->
+                                        <exclude>com.ongres.scram:common</exclude>
+                                        <exclude>com.ongres.scram:client</exclude>
+                                        <exclude>com.ongres.scram:scram-common:[,3.2)</exclude>
+                                        <exclude>com.ongres.scram:scram-client:[,3.2)</exclude>
+                                    </excludes>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>

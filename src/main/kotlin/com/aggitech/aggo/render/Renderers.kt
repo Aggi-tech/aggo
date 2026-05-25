@@ -133,9 +133,8 @@ fun renderDelete(query: Delete<*>, dialect: SqlDialect): RenderedSql {
     return RenderedSql(sql, ctx.params)
 }
 
-@Suppress("UNCHECKED_CAST")
 private fun <V> bindAssignment(a: Assignment<*, V>, ctx: RenderContext): String =
-    ctx.bind(a.value, a.codec as Codec<V>, a.column)
+    ctx.bind(a.value, a.codec, a.column)
 
 private fun renderQualifiedColumn(column: Column<*, *>, dialect: SqlDialect): String =
     "${dialect.quoteIdentifier(column.table.name)}.${dialect.quoteIdentifier(column.name)}"
