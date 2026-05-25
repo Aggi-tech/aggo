@@ -70,6 +70,11 @@
 
         <maven-enforcer.version>3.5.0</maven-enforcer.version>
         <surefire.version>3.5.2</surefire.version>
+        <maven.source.version>3.3.1</maven.source.version>
+        <maven.antrun.version>3.1.0</maven.antrun.version>
+        <maven.jar.version>3.5.0</maven.jar.version>
+        <maven.gpg.version>3.2.7</maven.gpg.version>
+        <central.publishing.version>0.10.0</central.publishing.version>
     </properties>
 
     <dependencyManagement>
@@ -244,11 +249,21 @@
             <!-- -sources.jar required by Maven Central -->
             <plugin>
                 <artifactId>maven-source-plugin</artifactId>
-                <version>3.3.1</version>
+                <version>${maven.source.version}</version>
                 <executions>
                     <execution>
                         <id>attach-sources</id>
+                        <phase>package</phase>
                         <goals><goal>jar-no-fork</goal></goals>
+                        <configuration>
+                            <classifier>sources</classifier>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>default-cli</id>
+                        <configuration>
+                            <attach>false</attach>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>
@@ -284,19 +299,12 @@
         -->
         <profile>
             <id>central</id>
-            <distributionManagement>
-                <repository>
-                    <id>central</id>
-                    <name>Maven Central</name>
-                    <url>https://central.sonatype.com/api/v1/publisher/upload</url>
-                </repository>
-            </distributionManagement>
             <build>
                 <plugins>
                     <!-- GPG signing — required by Maven Central -->
                     <plugin>
                         <artifactId>maven-gpg-plugin</artifactId>
-                        <version>3.2.7</version>
+                        <version>${maven.gpg.version}</version>
                         <executions>
                             <execution>
                                 <id>sign-artifacts</id>
@@ -312,17 +320,41 @@
                         </executions>
                     </plugin>
 
-                    <!-- Javadoc jar — required by Maven Central (Kotlin stub) -->
+                    <!-- Javadoc jar required by Maven Central. This is a Kotlin-only
+                         project, so the standard Javadoc plugin has no Java sources
+                         to process; attach a small documentation placeholder instead. -->
                     <plugin>
-                        <artifactId>maven-javadoc-plugin</artifactId>
-                        <version>3.10.1</version>
-                        <configuration>
-                            <source>21</source>
-                        </configuration>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <version>${maven.antrun.version}</version>
+                        <executions>
+                            <execution>
+                                <id>prepare-kotlin-javadocs</id>
+                                <phase>prepare-package</phase>
+                                <goals><goal>run</goal></goals>
+                                <configuration>
+                                    <target>
+                                        <mkdir dir="${project.build.directory}/apidocs"/>
+                                        <echo file="${project.build.directory}/apidocs/README.txt">
+Aggo is implemented in Kotlin. Public API documentation is provided by the sources artifact.
+                                        </echo>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <plugin>
+                        <artifactId>maven-jar-plugin</artifactId>
+                        <version>${maven.jar.version}</version>
                         <executions>
                             <execution>
                                 <id>attach-javadocs</id>
+                                <phase>package</phase>
                                 <goals><goal>jar</goal></goals>
+                                <configuration>
+                                    <classifier>javadoc</classifier>
+                                    <classesDirectory>${project.build.directory}/apidocs</classesDirectory>
+                                </configuration>
                             </execution>
                         </executions>
                     </plugin>
@@ -331,7 +363,7 @@
                     <plugin>
                         <groupId>org.sonatype.central</groupId>
                         <artifactId>central-publishing-maven-plugin</artifactId>
-                        <version>0.6.0</version>
+                        <version>${central.publishing.version}</version>
                         <extensions>true</extensions>
                         <configuration>
                             <publishingServerId>central</publishingServerId>

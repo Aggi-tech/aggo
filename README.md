@@ -147,9 +147,9 @@ Native build: no `reflect-config.json` needed for aggo itself.
 ## Build / publish
 
 ```bash
-cd libs/aggo
 mvn verify                # build + tests
 mvn deploy                # publish to GitHub Packages (requires GITHUB_TOKEN with write:packages)
+mvn deploy -P central     # publish to Maven Central (requires Central + GPG secrets)
 ```
 
 `~/.m2/settings.xml` for publishing:
@@ -157,9 +157,14 @@ mvn deploy                # publish to GitHub Packages (requires GITHUB_TOKEN wi
 ```xml
 <servers>
   <server>
-    <id>github</id>
+    <id>github-aggi-tech</id>
     <username>YOUR_GH_USER</username>
     <password>${env.GITHUB_TOKEN}</password>
+  </server>
+  <server>
+    <id>central</id>
+    <username>${env.CENTRAL_USERNAME}</username>
+    <password>${env.CENTRAL_PASSWORD}</password>
   </server>
 </servers>
 ```

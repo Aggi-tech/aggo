@@ -27,10 +27,10 @@ jobs:
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
       - name: Run tests before publishing
-        run: mvn test -Dtest='!IntegrationTest' --no-transfer-progress
+        run: mvn -B test -Dtest='!IntegrationTest' --no-transfer-progress
 
       - name: Publish to Maven Central
-        run: mvn deploy -P central --no-transfer-progress -DskipTests
+        run: mvn -B deploy -P central --no-transfer-progress -DskipTests
         env:
           CENTRAL_USERNAME:     ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD:     ${{ secrets.CENTRAL_PASSWORD }}
