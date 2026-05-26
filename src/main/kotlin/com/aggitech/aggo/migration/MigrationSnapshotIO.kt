@@ -69,6 +69,14 @@ internal fun MigrationSchema.toJson(): String = buildString {
                 "\"onUpdate\":${jsonString(fk.onUpdate)}" +
                 "}$comma")
         }
+        appendLine("      ],")
+        appendLine("      \"indexes\": [")
+        table.indexes.forEachIndexed { ii, idx ->
+            val comma = if (ii < table.indexes.lastIndex) "," else ""
+            append("        {\"name\":${jsonString(idx.name)},\"columns\":[")
+            append(idx.columns.joinToString(",") { jsonString(it) })
+            appendLine("],\"method\":${jsonString(idx.method)}}$comma")
+        }
         appendLine("      ]")
         val tableComma = if (ti < tables.lastIndex) "," else ""
         appendLine("    }$tableComma")
@@ -177,6 +185,19 @@ internal fun migrationSchemaFromJson(json: String): MigrationSchema {
             )
         }
 
+        @Suppress("UNCHECKED_CAST")
+        val indexesRaw = t["indexes"] as? List<*> ?: emptyList<Any>()
+        val indexes = indexesRaw.map { idxRaw ->
+            @Suppress("UNCHECKED_CAST")
+            val i = idxRaw as Map<String, Any>
+            MigrationIndex(
+                name = i["name"] as? String ?: throw IllegalArgumentException("index missing 'name'"),
+                columns = (i["columns"] as? List<*> ?: throw IllegalArgumentException("index missing 'columns'"))
+                    .filterIsInstance<String>(),
+                method = i["method"] as? String ?: "btree",
+            )
+        }
+
         MigrationTable(
             name = name,
             columns = columns,
@@ -184,6 +205,7 @@ internal fun migrationSchemaFromJson(json: String): MigrationSchema {
             uniques = uniques,
             primaryKey = primaryKey,
             foreignKeys = foreignKeys,
+            indexes = indexes,
         )
     }
 

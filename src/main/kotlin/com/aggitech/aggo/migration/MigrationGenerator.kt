@@ -78,11 +78,15 @@ data class MigrationTable(
     val uniques: List<MigrationUnique> = emptyList(),
     val primaryKey: List<String> = emptyList(),
     val foreignKeys: List<MigrationForeignKey> = emptyList(),
+    val indexes: List<MigrationIndex> = emptyList(),
 ) {
     init {
         require(columns.isNotEmpty()) { "migration table '$name' must have at least one column" }
         require(columns.map { it.name }.toSet().size == columns.size) {
             "duplicate column in migration table '$name'"
+        }
+        require(indexes.map { it.name }.toSet().size == indexes.size) {
+            "duplicate index in migration table '$name'"
         }
     }
 }
@@ -105,6 +109,18 @@ data class MigrationCheck(
 data class MigrationUnique(
     val name: String,
     val columns: List<String>,
+)
+
+/**
+ * Immutable index metadata — emits a `CREATE INDEX … USING <method>` statement.
+ *
+ * Only non-unique indexes are modelled here. Unique constraints are tracked in
+ * [MigrationUnique] and emitted as `CONSTRAINT … UNIQUE` clauses instead.
+ */
+data class MigrationIndex(
+    val name: String,
+    val columns: List<String>,
+    val method: String = "btree",
 )
 
 /**
@@ -194,6 +210,15 @@ fun Table<*>.toMigrationTable(dialect: MigrationDialect): MigrationTable =
                 onUpdate = fk.onUpdate.sql,
             )
         },
+        indexes = columns.mapNotNull { col ->
+            col.indexDeclaration?.let { idx ->
+                MigrationIndex(
+                    name = idx.effectiveName(name, col.name),
+                    columns = listOf(col.name),
+                    method = idx.method.sql,
+                )
+            }
+        },
     )
 
 /** Materializes a versioned schema snapshot from Aggo table descriptors. */
@@ -240,6 +265,7 @@ fun migrationPlan(
 
     val tableSteps: List<MigrationStep>
     val fkSteps: List<MigrationStep>
+    val indexSteps: List<MigrationStep>
 
     if (previous == null) {
         tableSteps = current.tables.map { table ->
@@ -257,12 +283,22 @@ fun migrationPlan(
                 )
             }
         }
+        // Indexes come after FKs — tables and their columns must exist first.
+        indexSteps = current.tables.flatMap { table ->
+            table.indexes.map { idx ->
+                MigrationStep(
+                    change = "create index ${table.name}.${idx.name}",
+                    sql = buildIndexSql(table.name, idx, dialect),
+                )
+            }
+        }
     } else {
         tableSteps = diffSchemas(previous, current, dialect, ifNotExists)
-        fkSteps = emptyList()  // FK diffs are handled inside diffSchemas → diffTable
+        fkSteps = emptyList()     // FK diffs are handled inside diffSchemas → diffTable
+        indexSteps = emptyList()  // index diffs are handled inside diffSchemas → diffTable
     }
 
-    return MigrationPlan(previous?.version, current.version, customTypeSteps + tableSteps + fkSteps)
+    return MigrationPlan(previous?.version, current.version, customTypeSteps + tableSteps + fkSteps + indexSteps)
 }
 
 /**
@@ -550,6 +586,30 @@ private fun diffTable(
         }
     }
 
+    val previousIndexes = previous.indexes.associateBy { it.name }
+    val currentIndexes = current.indexes.associateBy { it.name }
+    for (idx in current.indexes) {
+        val old = previousIndexes[idx.name]
+        when {
+            old == null -> steps += MigrationStep(
+                change = "create index ${current.name}.${idx.name}",
+                sql = buildIndexSql(current.name, idx, dialect),
+            )
+            old != idx -> steps += MigrationStep(
+                change = "change index ${current.name}.${idx.name}",
+                requiresManualMigration = true,
+            )
+        }
+    }
+    for (idx in previous.indexes) {
+        if (idx.name !in currentIndexes) {
+            steps += MigrationStep(
+                change = "drop index ${idx.name}",
+                sql = "DROP INDEX ${dialect.quoteIdentifier(idx.name)};",
+            )
+        }
+    }
+
     return steps
 }
 
@@ -568,6 +628,20 @@ internal fun buildUniqueAlterTable(tableName: String, unique: MigrationUnique, d
     return "ALTER TABLE ${dialect.quoteIdentifier(tableName)} ADD CONSTRAINT ${dialect.quoteIdentifier(unique.name)} " +
         "UNIQUE ($cols);"
 }
+
+internal fun buildIndexSql(tableName: String, index: MigrationIndex, dialect: SqlDialect): String {
+    val cols = index.columns.joinToString(", ") { dialect.quoteIdentifier(it) }
+    return "CREATE INDEX ${dialect.quoteIdentifier(index.name)} " +
+        "ON ${dialect.quoteIdentifier(tableName)} USING ${index.method} ($cols);"
+}
+
+/** Returns `CREATE INDEX` statements for all declared indexes on an Aggo table. */
+fun Table<*>.addIndexesSql(dialect: MigrationDialect): List<String> =
+    toMigrationTable(dialect).addIndexesSql(dialect)
+
+/** Returns `CREATE INDEX` statements for all declared indexes on a table snapshot. */
+fun MigrationTable.addIndexesSql(dialect: SqlDialect): List<String> =
+    indexes.map { idx -> buildIndexSql(name, idx, dialect) }
 
 private fun diffCustomTypes(
     previous: List<MigrationCustomType>,

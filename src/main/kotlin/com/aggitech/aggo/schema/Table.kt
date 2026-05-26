@@ -117,6 +117,7 @@ abstract class Table<E>(val name: String) {
         sensitive: Boolean,
         sqlType: String?,
         getter: (E) -> V?,
+        indexDeclaration: IndexDeclaration? = null,
     ): Column<E, V> {
         // V-2: validate before mutating mutableColumns so a bad name does not
         // half-register a column. Duplicate-name check protects fromRow().
@@ -136,6 +137,7 @@ abstract class Table<E>(val name: String) {
             checkExpression = checks.firstOrNull()?.expression,
             checkConstraints = checks,
             uniqueConstraint = unique,
+            indexDeclaration = indexDeclaration,
             sensitive = sensitive,
             sqlType = sqlType,
         )
@@ -578,6 +580,7 @@ abstract class Table<E>(val name: String) {
         private val unique: UniqueConstraint? = null,
         private val sensitive: Boolean = false,
         private val pendingForeignKey: PendingForeignKey<V>? = null,
+        private val indexDeclaration: IndexDeclaration? = null,
     ) {
         /** Marks the column as `NOT NULL` and keeps building the column. */
         fun required(): ColumnBuilder<T, V> = copy(isNullable = false)
@@ -630,6 +633,23 @@ abstract class Table<E>(val name: String) {
             copy(unique = UniqueConstraint(name, key))
 
         /**
+         * Declares a database index on this column.
+         *
+         * Emits a `CREATE INDEX … USING <method>` statement in the migration plan.
+         * Use [IndexMethod.GIN] for full-text / JSONB columns, [IndexMethod.BTREE]
+         * (the default) for equality and range queries.
+         *
+         * ```kotlin
+         * val email = text("email").index().required { it.email }
+         * val body  = text("body").index(method = IndexMethod.GIN).required { it.body }
+         * ```
+         */
+        fun index(
+            name: String? = null,
+            method: IndexMethod = IndexMethod.BTREE,
+        ): ColumnBuilder<T, V> = copy(indexDeclaration = IndexDeclaration(name, method))
+
+        /**
          * Declares a foreign key to [target] and keeps building the column.
          *
          * The Kotlin value type must match the referenced column type.
@@ -667,6 +687,7 @@ abstract class Table<E>(val name: String) {
                 sensitive = sensitive,
                 sqlType = sqlType,
                 getter = getter,
+                indexDeclaration = indexDeclaration,
             )
             pendingForeignKey?.let { fk ->
                 @Suppress("UNCHECKED_CAST")
@@ -693,6 +714,7 @@ abstract class Table<E>(val name: String) {
             unique: UniqueConstraint? = this.unique,
             sensitive: Boolean = this.sensitive,
             pendingForeignKey: PendingForeignKey<V>? = this.pendingForeignKey,
+            indexDeclaration: IndexDeclaration? = this.indexDeclaration,
         ): ColumnBuilder<T, V> = ColumnBuilder(
             owner = owner,
             name = name,
@@ -705,6 +727,7 @@ abstract class Table<E>(val name: String) {
             unique = unique,
             sensitive = sensitive,
             pendingForeignKey = pendingForeignKey,
+            indexDeclaration = indexDeclaration,
         )
     }
 

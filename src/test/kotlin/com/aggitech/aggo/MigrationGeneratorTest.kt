@@ -3,8 +3,10 @@ package com.aggitech.aggo
 import com.aggitech.aggo.dialect.PostgresDialect
 import com.aggitech.aggo.migration.MigrationColumn
 import com.aggitech.aggo.migration.MigrationCustomType
+import com.aggitech.aggo.migration.MigrationIndex
 import com.aggitech.aggo.migration.MigrationSchema
 import com.aggitech.aggo.migration.MigrationTable
+import com.aggitech.aggo.migration.addIndexesSql
 import com.aggitech.aggo.migration.createTableSql
 import com.aggitech.aggo.migration.dropTableSql
 import com.aggitech.aggo.migration.migrationPlan
@@ -13,6 +15,7 @@ import com.aggitech.aggo.schema.BigDecimalCodec
 import com.aggitech.aggo.schema.BooleanCodec
 import com.aggitech.aggo.schema.Checks
 import com.aggitech.aggo.schema.Codec
+import com.aggitech.aggo.schema.IndexMethod
 import com.aggitech.aggo.schema.InstantCodec
 import com.aggitech.aggo.schema.IntCodec
 import com.aggitech.aggo.schema.LongCodec
@@ -91,6 +94,15 @@ private object ExternalTypeCodec : MigratableCodec<String> {
 private object ExternalTable : Table<Unit>("external_items") {
     val kind = column("kind", ExternalTypeCodec) { null }
     override fun fromRow(row: io.r2dbc.spi.Row): Unit = Unit
+}
+
+// M-19 fixtures: tables with indexes for index-tracking tests
+private object SearchableTable : Table<Unit>("articles") {
+    val id    = text("id").primaryKey().required { null }
+    val title = text("title").index().required { null }
+    val body  = text("body").index(method = IndexMethod.GIN).required { null }
+    val score = integer("score").required { null }
+    override fun fromRow(row: Row): Unit = Unit
 }
 
 // M-9 fixtures: must be top-level because named objects cannot be local in Kotlin
@@ -354,5 +366,116 @@ class MigrationGeneratorTest : StringSpec({
         val schema = migrationSchema("v1", listOf(TasksTable, SubtasksTable), PostgresDialect)
         schema.customTypes.size shouldBe 1
         schema.customTypes.single().name shouldBe "priority_level"
+    }
+
+    // M-19: migrationSchema captures index declarations from ColumnBuilder.index()
+    "migrationSchema materializes index declarations from ColumnBuilder" {
+        val schema = migrationSchema("v1", listOf(SearchableTable), PostgresDialect)
+        val table = schema.tables.single()
+
+        table.indexes.size shouldBe 2
+        table.indexes[0].name shouldBe "idx_articles_title"
+        table.indexes[0].columns shouldBe listOf("title")
+        table.indexes[0].method shouldBe "btree"
+        table.indexes[1].name shouldBe "idx_articles_body"
+        table.indexes[1].columns shouldBe listOf("body")
+        table.indexes[1].method shouldBe "gin"
+    }
+
+    // M-20: migrationPlan without previous schema emits CREATE INDEX after CREATE TABLE + FK steps
+    "migrationPlan emits CREATE INDEX steps after CREATE TABLE on first run" {
+        val schema = migrationSchema("v1", listOf(SearchableTable), PostgresDialect)
+        val plan = migrationPlan(schema, PostgresDialect)
+
+        val tableStep = plan.steps.first { it.change.startsWith("create table") }
+        val indexSteps = plan.steps.filter { it.change.startsWith("create index") }
+
+        (plan.steps.indexOf(tableStep) < plan.steps.indexOf(indexSteps.first())) shouldBe true
+        indexSteps.size shouldBe 2
+        indexSteps[0].change shouldBe "create index articles.idx_articles_title"
+        indexSteps[0].sql shouldBe """CREATE INDEX "idx_articles_title" ON "articles" USING btree ("title");"""
+        indexSteps[1].change shouldBe "create index articles.idx_articles_body"
+        indexSteps[1].sql shouldBe """CREATE INDEX "idx_articles_body" ON "articles" USING gin ("body");"""
+    }
+
+    // M-21: addIndexesSql returns CREATE INDEX statements for a table
+    "addIndexesSql emits correct CREATE INDEX DDL" {
+        val sqls = SearchableTable.addIndexesSql(PostgresDialect)
+        sqls.size shouldBe 2
+        sqls[0] shouldBe """CREATE INDEX "idx_articles_title" ON "articles" USING btree ("title");"""
+        sqls[1] shouldBe """CREATE INDEX "idx_articles_body" ON "articles" USING gin ("body");"""
+    }
+
+    // M-22: diff detects a new index on an existing table and auto-generates CREATE INDEX
+    "migrationPlan diff auto-generates CREATE INDEX for a new index" {
+        val previous = MigrationSchema(
+            "v1",
+            listOf(MigrationTable("articles", listOf(
+                MigrationColumn("id", "TEXT", nullable = false),
+                MigrationColumn("title", "TEXT", nullable = false),
+            ))),
+        )
+        val current = MigrationSchema(
+            "v2",
+            listOf(MigrationTable("articles",
+                columns = listOf(
+                    MigrationColumn("id", "TEXT", nullable = false),
+                    MigrationColumn("title", "TEXT", nullable = false),
+                ),
+                indexes = listOf(MigrationIndex("idx_articles_title", listOf("title"), "btree")),
+            )),
+        )
+        val plan = migrationPlan(current, PostgresDialect, previous = previous)
+
+        plan.steps.size shouldBe 1
+        plan.steps[0].change shouldBe "create index articles.idx_articles_title"
+        plan.steps[0].sql shouldBe """CREATE INDEX "idx_articles_title" ON "articles" USING btree ("title");"""
+        plan.steps[0].requiresManualMigration shouldBe false
+    }
+
+    // M-23: diff detects a dropped index and auto-generates DROP INDEX (safe — no data loss)
+    "migrationPlan diff auto-generates DROP INDEX for a removed index" {
+        val previous = MigrationSchema(
+            "v1",
+            listOf(MigrationTable("articles",
+                columns = listOf(MigrationColumn("id", "TEXT", nullable = false)),
+                indexes = listOf(MigrationIndex("idx_articles_title", listOf("title"), "btree")),
+            )),
+        )
+        val current = MigrationSchema(
+            "v2",
+            listOf(MigrationTable("articles",
+                columns = listOf(MigrationColumn("id", "TEXT", nullable = false)),
+            )),
+        )
+        val plan = migrationPlan(current, PostgresDialect, previous = previous)
+
+        plan.steps.size shouldBe 1
+        plan.steps[0].change shouldBe "drop index idx_articles_title"
+        plan.steps[0].sql shouldBe """DROP INDEX "idx_articles_title";"""
+        plan.steps[0].requiresManualMigration shouldBe false
+    }
+
+    // M-24: diff detects a changed index (method or columns) and flags manual migration
+    "migrationPlan diff marks a changed index as requiresManualMigration" {
+        val previous = MigrationSchema(
+            "v1",
+            listOf(MigrationTable("articles",
+                columns = listOf(MigrationColumn("id", "TEXT", nullable = false)),
+                indexes = listOf(MigrationIndex("idx_articles_title", listOf("title"), "btree")),
+            )),
+        )
+        val current = MigrationSchema(
+            "v2",
+            listOf(MigrationTable("articles",
+                columns = listOf(MigrationColumn("id", "TEXT", nullable = false)),
+                indexes = listOf(MigrationIndex("idx_articles_title", listOf("title"), "hash")),
+            )),
+        )
+        val plan = migrationPlan(current, PostgresDialect, previous = previous)
+
+        plan.steps.size shouldBe 1
+        plan.steps[0].change shouldBe "change index articles.idx_articles_title"
+        plan.steps[0].requiresManualMigration shouldBe true
     }
 })

@@ -24,6 +24,7 @@ class Column<E, V>(
     val checkConstraints: List<CheckConstraint> =
         checkExpression?.let { listOf(CheckConstraint(expression = it)) } ?: emptyList(),
     val uniqueConstraint: UniqueConstraint? = null,
+    val indexDeclaration: IndexDeclaration? = null,
     /**
      * V-6: when true, every [com.aggitech.aggo.render.Bound] originating from
      * this column (UPDATE/INSERT assignment or `column eq value` predicate)
@@ -106,4 +107,28 @@ data class UniqueConstraint(
 
     fun effectiveKey(tableName: String, columnName: String): String =
         key ?: effectiveName(tableName, columnName)
+}
+
+/** PostgreSQL index access method. */
+enum class IndexMethod(val sql: String) {
+    BTREE("btree"),
+    HASH("hash"),
+    GIN("gin"),
+    GIST("gist"),
+    SPGIST("spgist"),
+    BRIN("brin"),
+}
+
+/**
+ * Stable metadata for a non-unique database index on a single column.
+ *
+ * Declare via `.index()` on a [com.aggitech.aggo.schema.Table.ColumnBuilder].
+ * The migration layer converts this into a `CREATE INDEX … USING …` statement.
+ */
+data class IndexDeclaration(
+    val name: String? = null,
+    val method: IndexMethod = IndexMethod.BTREE,
+) {
+    fun effectiveName(tableName: String, columnName: String): String =
+        name ?: "idx_${tableName}_${columnName}"
 }

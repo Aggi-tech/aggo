@@ -3,6 +3,7 @@ package com.aggitech.aggo
 import com.aggitech.aggo.migration.MigrationCheck
 import com.aggitech.aggo.migration.MigrationColumn
 import com.aggitech.aggo.migration.MigrationCustomType
+import com.aggitech.aggo.migration.MigrationIndex
 import com.aggitech.aggo.migration.MigrationSchema
 import com.aggitech.aggo.migration.MigrationTable
 import com.aggitech.aggo.migration.migrationSchemaFromJson
@@ -194,5 +195,55 @@ class MigrationSnapshotIOTest : StringSpec({
         schema.customTypes shouldBe emptyList()
         val restored = migrationSchemaFromJson(schema.toJson())
         restored.customTypes shouldBe emptyList()
+    }
+
+    // SN-4: indexes round-trip through JSON serialization
+    "round-trips a schema with indexes" {
+        val schema = MigrationSchema(
+            version = "v-idx",
+            tables = listOf(
+                MigrationTable(
+                    name = "articles",
+                    columns = listOf(
+                        MigrationColumn("id", "TEXT", nullable = false),
+                        MigrationColumn("title", "TEXT", nullable = false),
+                        MigrationColumn("body", "TEXT", nullable = false),
+                    ),
+                    indexes = listOf(
+                        MigrationIndex("idx_articles_title", listOf("title"), "btree"),
+                        MigrationIndex("idx_articles_body", listOf("body"), "gin"),
+                    ),
+                )
+            ),
+        )
+        val restored = migrationSchemaFromJson(schema.toJson())
+        restored.tables.single().indexes.size shouldBe 2
+        restored.tables.single().indexes[0].name shouldBe "idx_articles_title"
+        restored.tables.single().indexes[0].method shouldBe "btree"
+        restored.tables.single().indexes[1].name shouldBe "idx_articles_body"
+        restored.tables.single().indexes[1].method shouldBe "gin"
+        restored shouldBe schema
+    }
+
+    // SN-5: JSON without indexes field deserializes as empty list (backwards compatibility)
+    "migrationSchemaFromJson tolerates missing indexes field in snapshot" {
+        val json = """
+            {
+              "version": "v-old-no-idx",
+              "tables": [
+                {
+                  "name": "things",
+                  "columns": [{"name":"id","sqlType":"TEXT","nullable":false,"generated":false}],
+                  "checks": [],
+                  "uniques": [],
+                  "primaryKey": ["id"],
+                  "foreignKeys": []
+                }
+              ],
+              "customTypes": []
+            }
+        """.trimIndent()
+        val schema = migrationSchemaFromJson(json)
+        schema.tables.single().indexes shouldBe emptyList()
     }
 })
