@@ -45,8 +45,13 @@ data class ForeignKey(
     val onDelete: ForeignKeyAction = ForeignKeyAction.RESTRICT,
     val onUpdate: ForeignKeyAction = ForeignKeyAction.RESTRICT,
     val constraintName: String? = null,
+    val key: String? = null,
 ) {
     /** The effective constraint name used in DDL. */
     val effectiveName: String
         get() = constraintName ?: "fk_${column.table.name}_${column.name}"
+
+    /** Application-facing key used when mapping database constraint failures. */
+    val effectiveKey: String
+        get() = key ?: effectiveName
 }

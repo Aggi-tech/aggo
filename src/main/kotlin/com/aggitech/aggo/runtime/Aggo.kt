@@ -197,6 +197,21 @@ class Aggo(private val pool: AggoPool) : AutoCloseable {
     }
 
     /**
+     * Typed-result variant of [read]. Exceptions are captured as [Query.Failure]
+     * and mapped through [errorMap], making constraint errors easy to translate
+     * to API/form responses.
+     */
+    suspend fun <T> readQuery(
+        errorMap: ConstraintErrorMap = ConstraintErrorMap.empty,
+        block: suspend Session.() -> T,
+    ): Query<T, AggoError> =
+        try {
+            Query.Success(read(block))
+        } catch (t: Throwable) {
+            Query.Failure(errorMap.map(t))
+        }
+
+    /**
      * Runs [block] inside a single `BEGIN … COMMIT` transaction.
      *
      * If [block] throws, the transaction is rolled back automatically. Rollback
@@ -245,6 +260,20 @@ class Aggo(private val pool: AggoPool) : AutoCloseable {
             }
         }
     }
+
+    /**
+     * Typed-result variant of [tx]. The transaction still rolls back on failure,
+     * but callers receive a [Transaction.Failure] instead of catching exceptions.
+     */
+    suspend fun <T> transaction(
+        errorMap: ConstraintErrorMap = ConstraintErrorMap.empty,
+        block: suspend Session.() -> T,
+    ): Transaction<T, AggoError> =
+        try {
+            Query.Success(tx(block))
+        } catch (t: Throwable) {
+            Query.Failure(errorMap.map(t))
+        }
 
     // ----- One-shot convenience helpers -----------------------------------
     //

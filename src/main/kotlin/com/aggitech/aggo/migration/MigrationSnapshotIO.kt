@@ -46,6 +46,14 @@ internal fun MigrationSchema.toJson(): String = buildString {
             appendLine("        {\"name\":${jsonString(chk.name)},\"expression\":${jsonString(chk.expression)}}$comma")
         }
         appendLine("      ],")
+        appendLine("      \"uniques\": [")
+        table.uniques.forEachIndexed { ui, unique ->
+            val comma = if (ui < table.uniques.lastIndex) "," else ""
+            append("        {\"name\":${jsonString(unique.name)},\"columns\":[")
+            append(unique.columns.joinToString(",") { jsonString(it) })
+            appendLine("]}$comma")
+        }
+        appendLine("      ],")
         append("      \"primaryKey\": [")
         append(table.primaryKey.joinToString(",") { jsonString(it) })
         appendLine("],")
@@ -139,6 +147,18 @@ internal fun migrationSchemaFromJson(json: String): MigrationSchema {
         }
 
         @Suppress("UNCHECKED_CAST")
+        val uniquesRaw = t["uniques"] as? List<*> ?: emptyList<Any>()
+        val uniques = uniquesRaw.map { uniqueRaw ->
+            @Suppress("UNCHECKED_CAST")
+            val u = uniqueRaw as Map<String, Any>
+            MigrationUnique(
+                name = u["name"] as? String ?: throw IllegalArgumentException("unique missing 'name'"),
+                columns = (u["columns"] as? List<*> ?: throw IllegalArgumentException("unique missing 'columns'"))
+                    .filterIsInstance<String>(),
+            )
+        }
+
+        @Suppress("UNCHECKED_CAST")
         val primaryKey = (t["primaryKey"] as? List<*> ?: emptyList<Any>())
             .filterIsInstance<String>()
 
@@ -157,7 +177,14 @@ internal fun migrationSchemaFromJson(json: String): MigrationSchema {
             )
         }
 
-        MigrationTable(name = name, columns = columns, checks = checks, primaryKey = primaryKey, foreignKeys = foreignKeys)
+        MigrationTable(
+            name = name,
+            columns = columns,
+            checks = checks,
+            uniques = uniques,
+            primaryKey = primaryKey,
+            foreignKeys = foreignKeys,
+        )
     }
 
     @Suppress("UNCHECKED_CAST")

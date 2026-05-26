@@ -21,6 +21,9 @@ class Column<E, V>(
     val isGenerated: Boolean = false,
     val isNullable: Boolean = false,
     val checkExpression: ((columnName: String) -> String)? = null,
+    val checkConstraints: List<CheckConstraint> =
+        checkExpression?.let { listOf(CheckConstraint(expression = it)) } ?: emptyList(),
+    val uniqueConstraint: UniqueConstraint? = null,
     /**
      * V-6: when true, every [com.aggitech.aggo.render.Bound] originating from
      * this column (UPDATE/INSERT assignment or `column eq value` predicate)
@@ -71,4 +74,36 @@ class Column<E, V>(
         other is Column<*, *> && other.table.name == table.name && other.name == name
 
     override fun hashCode(): Int = 31 * table.name.hashCode() + name.hashCode()
+}
+
+/**
+ * Stable metadata for a CHECK constraint.
+ *
+ * [key] is intentionally application-facing: use it to map database constraint
+ * failures back into API/form errors without coupling callers to SQL text.
+ */
+data class CheckConstraint(
+    val expression: (columnName: String) -> String,
+    val name: String? = null,
+    val key: String? = null,
+) {
+    fun effectiveName(tableName: String, columnName: String): String =
+        name ?: "chk_${tableName}_${columnName}"
+
+    fun effectiveKey(tableName: String, columnName: String): String =
+        key ?: effectiveName(tableName, columnName)
+}
+
+/**
+ * Stable metadata for a UNIQUE constraint.
+ */
+data class UniqueConstraint(
+    val name: String? = null,
+    val key: String? = null,
+) {
+    fun effectiveName(tableName: String, columnName: String): String =
+        name ?: "uq_${tableName}_${columnName}"
+
+    fun effectiveKey(tableName: String, columnName: String): String =
+        key ?: effectiveName(tableName, columnName)
 }
