@@ -28,6 +28,19 @@ class Column<E, V>(
      * digests, tokens, PII you cannot afford in trace logs.
      */
     val sensitive: Boolean = false,
+    /**
+     * Optional override for the DDL column type emitted by migration generation.
+     *
+     * When set, the migration generator uses this string verbatim instead of
+     * asking the dialect to map [Codec.sqlType]. This is the mechanism behind
+     * [com.aggitech.aggo.schema.Table.varchar], [com.aggitech.aggo.schema.Table.decimal],
+     * and the other typed column builders — each sets a precise SQL type while
+     * still using a generic primitive codec for read/write.
+     *
+     * The value is validated against [com.aggitech.aggo.schema.SQL_TYPE_REGEX]
+     * at column construction time to block injection through this surface.
+     */
+    val sqlType: String? = null,
 ) {
     /** Read this column out of an R2DBC [Row]. Required nulls are caller's problem. */
     fun read(row: Row): V? = codec.read(row, name)

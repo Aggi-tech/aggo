@@ -63,6 +63,7 @@ val deletedAt  = column("deleted_at", InstantCodec, isNullable = true)          
 | `IntCodec` | `Int` | `INTEGER` |
 | `LongCodec` | `Long` | `BIGINT` |
 | `ShortCodec` | `Short` | `SMALLINT` |
+| `FloatCodec` | `Float` | `REAL` |
 | `DoubleCodec` | `Double` | `DOUBLE PRECISION` |
 | `BooleanCodec` | `Boolean` | `BOOLEAN` |
 | `BigDecimalCodec` | `BigDecimal` | `NUMERIC` |
@@ -70,8 +71,84 @@ val deletedAt  = column("deleted_at", InstantCodec, isNullable = true)          
 | `LocalDateTimeCodec` | `LocalDateTime` | `TIMESTAMP` |
 | `LocalDateCodec` | `LocalDate` | `DATE` |
 | `UuidCodec` | `UUID` | `UUID` |
+| `ByteArrayCodec` | `ByteArray` | `BYTEA` |
 | `TsidCodec` | `Tsid` | `TEXT` (13-char Crockford base-32) |
 | `UlidCodec` | `Ulid` | `TEXT` (26-char Crockford base-32) |
+
+## Typed column builders (sized SQL types)
+
+For most columns you want a precise SQL type — `VARCHAR(100)` instead of `TEXT`,
+`NUMERIC(12, 2)` instead of unbounded `NUMERIC`, `SMALLINT` instead of
+`INTEGER`. Use the typed column builders directly instead of `column(...)`:
+
+```kotlin
+object UsersTable : Table<User>("users") {
+    val id        = uuid("id", isPrimaryKey = true)                      { it.id }
+    val email     = varchar("email", length = 255, check = Checks.email()) { it.email }
+    val name      = varchar("name", length = 100, check = Checks.notBlank()) { it.name }
+    val bio       = text("bio", isNullable = true)                       { it.bio }
+    val balance   = decimal("balance", precision = 12, scale = 2)        { it.balance }
+    val followers = integer("followers", check = Checks.nonNegative())   { it.followers }
+    val priority  = smallint("priority")                                 { it.priority }
+    val active    = boolean("active")                                    { it.active }
+    val createdAt = timestamptz("created_at", isGenerated = true)        { it.createdAt }
+    val birthday  = date("birthday", isNullable = true)                  { it.birthday }
+    ...
+}
+```
+
+Each builder produces the exact DDL — no fallback type mapping happens:
+
+```sql
+"id" UUID NOT NULL,
+"email" VARCHAR(255) NOT NULL,
+"name" VARCHAR(100) NOT NULL,
+"bio" TEXT,
+"balance" NUMERIC(12, 2) NOT NULL,
+"followers" INTEGER NOT NULL,
+"priority" SMALLINT NOT NULL,
+"active" BOOLEAN NOT NULL,
+"created_at" TIMESTAMPTZ NOT NULL,
+"birthday" DATE,
+```
+
+| Builder | Kotlin type | SQL type |
+|---------|-------------|----------|
+| `varchar(name, length)` | `String` | `VARCHAR(length)` |
+| `text(name)` | `String` | `TEXT` |
+| `integer(name)` | `Int` | `INTEGER` |
+| `bigint(name)` | `Long` | `BIGINT` |
+| `smallint(name)` | `Short` | `SMALLINT` |
+| `real(name)` | `Float` | `REAL` |
+| `doublePrecision(name)` | `Double` | `DOUBLE PRECISION` |
+| `decimal(name, precision, scale)` | `BigDecimal` | `NUMERIC(precision, scale)` |
+| `numeric(...)` | `BigDecimal` | _alias for `decimal`_ |
+| `boolean(name)` | `Boolean` | `BOOLEAN` |
+| `uuid(name)` | `UUID` | `UUID` |
+| `timestamptz(name)` | `Instant` | `TIMESTAMPTZ` |
+| `timestamp(name)` | `LocalDateTime` | `TIMESTAMP` |
+| `date(name)` | `LocalDate` | `DATE` |
+| `bytea(name)` | `ByteArray` | `BYTEA` |
+| `tsid(name)` | `Tsid` | `VARCHAR(13)` + `Checks.tsid()` constraint |
+| `ulid(name)` | `Ulid` | `VARCHAR(26)` + `Checks.ulid()` constraint |
+
+`varchar`, `text`, `uuid`, `tsid`, `ulid`, and `decimal` ship with an overload
+accepting an explicit `codec: Codec<V>` for value-class domain types — the
+SQL type stays the same while the Kotlin type follows the codec:
+
+```kotlin
+val UserIdCodec = ValueClassCodec(StringCodec, ::UserId, UserId::value)
+val id = varchar("id", length = 30, codec = UserIdCodec, isPrimaryKey = true) { it.id }
+```
+
+When you need a SQL type the builders don't cover (a domain type, an
+extension type, a vendor-specific keyword), pass `sqlType =` to the generic
+`column(...)`. The string is validated against an allowlist to block
+injection through this surface.
+
+```kotlin
+val embedding = column("embedding", ByteArrayCodec, sqlType = "VECTOR(1536)") { it.embedding }
+```
 
 ## ValueClassCodec — wrapping domain types
 
@@ -220,6 +297,65 @@ object OrdersTable : Table<Order>("orders") {
     val id = column("id", OrderIdCodec, isPrimaryKey = true, check = Checks.tsid()) { it.id }
     ...
 }
+```
+
+## DomainType — native PostgreSQL DOMAIN types
+
+A PostgreSQL `DOMAIN` is a named type that wraps an existing one and attaches
+reusable `CHECK` constraints. Use `DomainType.create` to build a codec backed
+by a DOMAIN; the migration generator emits the `CREATE DOMAIN …` statement
+before any `CREATE TABLE` that references it.
+
+```kotlin
+@JvmInline value class Slug(val raw: String)
+
+val SlugCodec = DomainType.create(
+    name        = "slug_domain",
+    base        = StringCodec,
+    sqlBaseType = "VARCHAR(64)",
+    wrap        = ::Slug,
+    unwrap      = Slug::raw,
+    checks      = listOf(Checks.notBlank(), Checks.length(min = 3, max = 64)),
+)
+
+object PostsTable : Table<Post>("posts") {
+    val id   = uuid("id", isPrimaryKey = true) { it.id }
+    val slug = column("slug", SlugCodec)        { it.slug }
+    ...
+}
+```
+
+Generated DDL:
+
+```sql
+DO $do$ BEGIN
+    CREATE DOMAIN "slug_domain" AS VARCHAR(64)
+        CHECK ((trim(VALUE) <> '') AND (char_length(VALUE) >= 3 AND char_length(VALUE) <= 64));
+EXCEPTION WHEN duplicate_object THEN NULL; END $do$;
+
+CREATE TABLE "posts" (
+    "id" UUID NOT NULL,
+    "slug" slug_domain NOT NULL,
+    ...
+);
+```
+
+The same `Checks.*` helpers used on regular columns work inside `DomainType.create`
+— Aggo rewrites the column-name placeholder to PostgreSQL's `VALUE` keyword so
+the constraint applies to the value being inserted into the DOMAIN.
+
+Set `createIfMissing = false` if you prefer the bare `CREATE DOMAIN …;` form
+(useful when each migration runs once and idempotency is handled upstream).
+
+For DOMAINs that don't wrap a value class, use `DomainType.createSimple`:
+
+```kotlin
+val PositiveIntCodec = DomainType.createSimple(
+    name        = "positive_int",
+    base        = IntCodec,
+    sqlBaseType = "INTEGER",
+    checks      = listOf(Checks.positive()),
+)
 ```
 
 ## MigratableCodec — custom PostgreSQL DDL types

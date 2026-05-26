@@ -48,19 +48,89 @@ fun main(args: Array<String>) = Migrations.runFromArgs(args)
 </plugin>
 ```
 
-### 3. Generate migrations
+### 3. Run subcommands
+
+`AggoMigrateTask` exposes a small set of subcommands as the first positional
+argument. With no subcommand, the legacy "generate with optional name" form is
+preserved.
 
 ```bash
-# Timestamp-only version label
+# Generate a new migration file from current Tables (default)
 mvn compile exec:java
+mvn compile exec:java -Dexec.args="generate add_orders_table"
 
-# With a descriptive name
-mvn compile exec:java -Daggo.name=add_orders_table
+# Apply pending migrations against the configured database
+mvn compile exec:java -Dexec.args="apply"
+
+# Show applied vs pending without running anything
+mvn compile exec:java -Dexec.args="status"
+
+# Print the pending SQL to stdout without applying
+mvn compile exec:java -Dexec.args="dry-run"
+
+# Drop every declared table and aggo_schema_versions (dev only by default)
+mvn compile exec:java -Dexec.args="drop"
+mvn compile exec:java -Dexec.args="drop --force"   # bypass prod guard
+
+# Drop + apply in one shot (e.g. reset a local DB after schema churn)
+mvn compile exec:java -Dexec.args="reset"
+
+# Print help
+mvn compile exec:java -Dexec.args="help"
 ```
 
-The task generates a `{timestamp}_name.sql` file and updates the snapshot. On
-subsequent runs with an unchanged schema it prints `No changes detected.` and
-exits without creating any file.
+`generate` produces a `{timestamp}_name.sql` file under `migrationsDir` and
+updates the snapshot. On a clean run with no schema changes it prints
+`No changes detected.` and exits without writing anything.
+
+#### Production safety
+
+`drop` and `reset` are destructive. They refuse to run when the resolved
+[environment](#environment-and-database-credentials) equals `prod`
+(case-insensitive) unless the caller also passes `--force`:
+
+```
+Refusing to drop in production. Set AGGO_ENV=dev/staging or pass --force to override.
+```
+
+CI pipelines should set `AGGO_ENV=prod` on real deploy targets so an accidental
+`reset` cannot wipe live data.
+
+#### Environment and database credentials
+
+Apply / status / drop / reset need a live database connection. Resolve it in
+one of two ways:
+
+1. **Override `poolConfig` in your `AggoMigrateTask` subclass** (preferred when
+   you want to reuse the application's connection settings):
+
+   ```kotlin
+   object Migrations : AggoMigrateTask() {
+       override val tables  = listOf(UsersTable, OrdersTable)
+       override val dialect = PostgresDialect
+       override val poolConfig = PostgresConfig(
+           host = "localhost",
+           database = "myapp",
+           user = "app",
+           password = System.getenv("DB_PASSWORD"),
+       )
+   }
+   ```
+
+2. **System properties / environment variables**:
+
+   | System property       | Env var               |
+   |-----------------------|-----------------------|
+   | `aggo.db.host`        | `AGGO_DB_HOST`        |
+   | `aggo.db.port`        | `AGGO_DB_PORT`        |
+   | `aggo.db.database`    | `AGGO_DB_DATABASE`    |
+   | `aggo.db.user`        | `AGGO_DB_USER`        |
+   | `aggo.db.password`    | `AGGO_DB_PASSWORD`    |
+   | `aggo.db.sslMode`     | `AGGO_DB_SSL_MODE`    |
+   | `aggo.env`            | `AGGO_ENV`            |
+
+   Prefer the env var for the password — system properties show up in
+   `ps aux` on shared hosts.
 
 ### Default file locations
 
@@ -365,8 +435,10 @@ externally managed types.
 
 `PostgresDialect` resolves a column's DDL type in this order:
 
-1. If the codec implements `MigratableCodec` → use `codec.ddlTypeName`
-2. Otherwise → use the built-in mapping below
+1. If the column was declared with `sqlType =` (or via a typed builder like
+   `varchar(length)`, `decimal(precision, scale)`) → use that string verbatim
+2. If the codec implements `MigratableCodec` → use `codec.ddlTypeName`
+3. Otherwise → use the built-in mapping below
 
 | Codec | PostgreSQL column type |
 |-------|------------------------|
@@ -374,6 +446,7 @@ externally managed types.
 | `IntCodec` | `INTEGER` |
 | `LongCodec` | `BIGINT` |
 | `ShortCodec` | `SMALLINT` |
+| `FloatCodec` | `REAL` |
 | `DoubleCodec` | `DOUBLE PRECISION` |
 | `BooleanCodec` | `BOOLEAN` |
 | `BigDecimalCodec` | `NUMERIC` |
@@ -381,10 +454,16 @@ externally managed types.
 | `LocalDateTimeCodec` | `TIMESTAMP` |
 | `LocalDateCodec` | `DATE` |
 | `UuidCodec` | `UUID` |
+| `ByteArrayCodec` | `BYTEA` |
 | `TsidCodec` | `TEXT` |
 | `UlidCodec` | `TEXT` |
 | `ValueClassCodec(XCodec, ...)` | same as `XCodec` |
 | `MigratableCodec` implementation | `codec.ddlTypeName` |
+
+Typed column builders (`varchar`, `decimal`, `smallint`, …) bypass this
+mapping and emit a sized SQL type instead. See the
+[Typed column builders](02-schema.md#typed-column-builders-sized-sql-types)
+section in the schema reference for the full list.
 
 ## Supporting other databases
 

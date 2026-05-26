@@ -139,7 +139,7 @@ fun Table<*>.toMigrationTable(dialect: MigrationDialect): MigrationTable =
         columns = columns.map { col ->
             MigrationColumn(
                 name = col.name,
-                sqlType = dialect.columnSqlType(col.codec),
+                sqlType = col.sqlType ?: dialect.columnSqlType(col.codec),
                 nullable = col.isNullable,
                 generated = col.isGenerated,
             )

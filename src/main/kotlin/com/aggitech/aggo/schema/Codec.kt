@@ -63,6 +63,24 @@ object DoubleCodec : Codec<Double> {
     override fun decode(raw: Any?): Double? = (raw as? Number)?.toDouble()
 }
 
+object FloatCodec : Codec<Float> {
+    override val sqlType: Class<*> = Float::class.javaObjectType
+    override fun encode(value: Float?): Any? = value
+    override fun decode(raw: Any?): Float? = (raw as? Number)?.toFloat()
+}
+
+object ShortCodec : Codec<Short> {
+    override val sqlType: Class<*> = Short::class.javaObjectType
+    override fun encode(value: Short?): Any? = value
+    override fun decode(raw: Any?): Short? = (raw as? Number)?.toShort()
+}
+
+object ByteArrayCodec : Codec<ByteArray> {
+    override val sqlType: Class<*> = ByteArray::class.java
+    override fun encode(value: ByteArray?): Any? = value
+    override fun decode(raw: Any?): ByteArray? = raw as? ByteArray
+}
+
 object BigDecimalCodec : Codec<BigDecimal> {
     override val sqlType: Class<*> = BigDecimal::class.java
     override fun encode(value: BigDecimal?): Any? = value

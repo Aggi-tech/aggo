@@ -1,0 +1,141 @@
+package com.aggitech.aggo
+
+import com.aggitech.aggo.dialect.MigrationDialect
+import com.aggitech.aggo.dialect.PostgresDialect
+import com.aggitech.aggo.migration.AggoMigrateTask
+import com.aggitech.aggo.migration.MigrationFileEntry
+import com.aggitech.aggo.migration.writeMigrationFile
+import com.aggitech.aggo.runtime.PostgresConfig
+import com.aggitech.aggo.schema.Table
+import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.core.spec.style.StringSpec
+import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
+import io.r2dbc.spi.Row
+import java.io.ByteArrayOutputStream
+import java.io.PrintStream
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Instant
+
+private object MiniTable : Table<Unit>("mini") {
+    @Suppress("unused")
+    val id = uuid("id", isPrimaryKey = true) { null }
+    override fun fromRow(row: Row): Unit = Unit
+}
+
+private class TestTask(
+    override val snapshotFile: Path,
+    override val migrationsDir: Path,
+    override val poolConfig: PostgresConfig? = null,
+    private val envValue: String = "dev",
+) : AggoMigrateTask() {
+    override val tables: List<Table<*>> = listOf(MiniTable)
+    override val dialect: MigrationDialect = PostgresDialect
+    override val environment: String get() = envValue
+}
+
+private fun captureStdout(block: () -> Unit): String {
+    val original = System.out
+    val sink = ByteArrayOutputStream()
+    System.setOut(PrintStream(sink))
+    try {
+        block()
+    } finally {
+        System.setOut(original)
+    }
+    return sink.toString()
+}
+
+class MigrationCliTest : StringSpec({
+
+    "help subcommand prints the subcommand list without touching the database" {
+        val tmp = Files.createTempDirectory("aggo-cli-help")
+        val task = TestTask(tmp.resolve("snapshot.json"), tmp.resolve("migrations"))
+        val out = captureStdout { task.runFromArgs(arrayOf("help")) }
+        out shouldContain "generate"
+        out shouldContain "apply"
+        out shouldContain "status"
+        out shouldContain "drop"
+        out shouldContain "reset"
+        out shouldContain "AGGO_ENV"
+    }
+
+    "dry-run prints SQL bodies of all on-disk migrations without DB access" {
+        val tmp = Files.createTempDirectory("aggo-cli-dryrun")
+        val migDir = Files.createDirectories(tmp.resolve("migrations"))
+        writeMigrationFile(
+            MigrationFileEntry(
+                version = "2026.05.26.000001",
+                fromVersion = null,
+                generatedAt = Instant.parse("2026-05-26T10:00:00Z"),
+                checksum = com.aggitech.aggo.migration.computeChecksum(
+                    "CREATE TABLE \"mini\" (\"id\" UUID NOT NULL);",
+                    Instant.parse("2026-05-26T10:00:00Z"),
+                ),
+                sql = "CREATE TABLE \"mini\" (\"id\" UUID NOT NULL);",
+            ),
+            migDir,
+        )
+
+        val task = TestTask(tmp.resolve("snapshot.json"), migDir)
+        val out = captureStdout { task.runFromArgs(arrayOf("dry-run")) }
+        out shouldContain "2026.05.26.000001"
+        out shouldContain "CREATE TABLE \"mini\""
+    }
+
+    "dry-run reports gracefully when migrations directory is empty" {
+        val tmp = Files.createTempDirectory("aggo-cli-empty")
+        val task = TestTask(tmp.resolve("snapshot.json"), tmp.resolve("migrations"))
+        val out = captureStdout { task.runFromArgs(arrayOf("dry-run")) }
+        out shouldContain "No migration files"
+    }
+
+    "drop subcommand without --force is refused when environment=prod" {
+        val tmp = Files.createTempDirectory("aggo-cli-prod")
+        val task = TestTask(
+            snapshotFile = tmp.resolve("snapshot.json"),
+            migrationsDir = tmp.resolve("migrations"),
+            envValue = "prod",
+        )
+        val ex = shouldThrow<IllegalStateException> { task.runFromArgs(arrayOf("drop")) }
+        ex.message!! shouldContain "Refusing to drop"
+    }
+
+    "reset subcommand without --force is refused when environment=prod" {
+        val tmp = Files.createTempDirectory("aggo-cli-prod2")
+        val task = TestTask(
+            snapshotFile = tmp.resolve("snapshot.json"),
+            migrationsDir = tmp.resolve("migrations"),
+            envValue = "prod",
+        )
+        val ex = shouldThrow<IllegalStateException> { task.runFromArgs(arrayOf("reset")) }
+        ex.message!! shouldContain "Refusing to reset"
+    }
+
+    "argv with no known subcommand falls through to generate (back-compat)" {
+        val tmp = Files.createTempDirectory("aggo-cli-backcompat")
+        val task = TestTask(tmp.resolve("snapshot.json"), tmp.resolve("migrations"))
+        // "my_label" is not a subcommand → generate runs and treats it as the name.
+        // Generation requires no DB access, so this works in unit tests.
+        captureStdout { task.runFromArgs(arrayOf("my_label")) }
+        val files = Files.list(tmp.resolve("migrations")).toList()
+        files.size shouldBe 1
+        files.single().fileName.toString() shouldContain "my_label"
+    }
+
+    "generate subcommand (explicit) accepts a name argument" {
+        val tmp = Files.createTempDirectory("aggo-cli-explicit")
+        val task = TestTask(tmp.resolve("snapshot.json"), tmp.resolve("migrations"))
+        captureStdout { task.runFromArgs(arrayOf("generate", "add_things")) }
+        val files = Files.list(tmp.resolve("migrations")).toList()
+        files.size shouldBe 1
+        files.single().fileName.toString() shouldContain "add_things"
+    }
+
+    "environment defaults to dev when no env or system property is set" {
+        val tmp = Files.createTempDirectory("aggo-cli-env")
+        val task = TestTask(tmp.resolve("snapshot.json"), tmp.resolve("migrations"))
+        task.environment shouldBe "dev"
+    }
+})

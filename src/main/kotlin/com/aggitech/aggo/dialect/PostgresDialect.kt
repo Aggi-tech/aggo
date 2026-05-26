@@ -41,6 +41,7 @@ object PostgresDialect : MigrationDialect {
         Int::class.javaObjectType       -> "INTEGER"
         Long::class.javaObjectType      -> "BIGINT"
         Short::class.javaObjectType     -> "SMALLINT"
+        Float::class.javaObjectType     -> "REAL"
         Double::class.javaObjectType    -> "DOUBLE PRECISION"
         Boolean::class.javaObjectType   -> "BOOLEAN"
         BigDecimal::class.java          -> "NUMERIC"
