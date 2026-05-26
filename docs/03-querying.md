@@ -32,6 +32,64 @@ val user: User? = aggo.read {
 }
 ```
 
+## readQuery — typed read results
+
+Use `readQuery` when you want query failures to be returned as values instead
+of thrown exceptions. The return type is `Query<Success, Error>`:
+
+```kotlin
+val result: Query<List<User>, AggoError> = aggo.readQuery {
+    fetchAll(UsersTable) {
+        where { UsersTable.active eq true }
+    }
+}
+
+val users = result.fold(
+    onSuccess = { it },
+    onFailure = { emptyList() },
+)
+```
+
+`Query` is a small monadic result type:
+
+```kotlin
+val count: Query<Int, AggoError> = aggo.readQuery {
+    fetchAll(UsersTable).size
+}
+
+val label: Query<String, AggoError> =
+    count
+        .map { "$it users" }
+        .flatMap { Query.Success("result: $it") }
+```
+
+Use `fold` at application boundaries to convert typed database results into
+HTTP responses, command results, or domain errors.
+
+```kotlin
+return result.fold(
+    onSuccess = { users -> HttpResponse.ok(users) },
+    onFailure = { error -> HttpResponse.serverError(error) },
+)
+```
+
+### Mapping read errors from constraints
+
+When a read runs SQL that can trigger constraints, such as `SELECT ... FOR
+UPDATE` in custom statements or read-side functions, pass a constraint error
+map:
+
+```kotlin
+val errorMap = constraintErrorMap(UsersTable)
+
+val result = aggo.readQuery(errorMap) {
+    fetchOne(UsersTable) { where { UsersTable.email eq email } }
+}
+```
+
+Known constraint violations become `ConstraintError`; everything else becomes
+`DatabaseError`.
+
 ## stream — process rows one at a time
 
 Use `stream` when the result set is too large to hold in memory. Returns a cold

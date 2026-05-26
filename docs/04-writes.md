@@ -164,6 +164,78 @@ try {
 }
 ```
 
+## transaction — typed transaction results
+
+Use `aggo.transaction { ... }` when callers should receive a typed result
+instead of catching exceptions. The return type is
+`Transaction<Success, Error>`, which has the same composition helpers as
+`Query`.
+
+```kotlin
+val result: Transaction<Long, AggoError> = aggo.transaction {
+    insert(UsersTable, user)
+}
+
+result.fold(
+    onSuccess = { rows -> println("inserted $rows row") },
+    onFailure = { error -> println("write failed: $error") },
+)
+```
+
+The transaction still rolls back on failure. The difference is only the caller
+contract: errors are returned as `Query.Failure(...)` instead of being
+thrown through your application layer.
+
+### Mapping constraint errors
+
+Build a `ConstraintErrorMap` from the tables involved in the transaction and
+pass it to `transaction`.
+
+```kotlin
+val errorMap = constraintErrorMap(UsersTable, ProfilesTable)
+
+val result = aggo.transaction(errorMap) {
+    val rows = insert(UsersTable, user)
+    insert(ProfilesTable, profile)
+    rows
+}
+```
+
+If the database reports a known check, unique, or foreign-key violation, Aggo
+returns `ConstraintError` with a stable application key:
+
+```kotlin
+result.fold(
+    onSuccess = { rows -> Created(rows) },
+    onFailure = { error ->
+        when (error) {
+            is ConstraintError -> BadRequest(
+                field = error.column,
+                code = error.key,
+            )
+            is DatabaseError -> InternalServerError("database.error")
+            else -> InternalServerError("unknown.error")
+        }
+    },
+)
+```
+
+Typical keys come from schema declarations:
+
+```kotlin
+val email = varchar("email", 255)
+    .required()
+    .unique(key = "user.email.taken")
+    .check(Checks.email(), key = "user.email.invalid") { it.email }
+
+val workspaceId = varchar("workspace_id", 26)
+    .required()
+    .references(Workspaces.id, key = "workspace.missing") { it.workspaceId }
+```
+
+This keeps API error mapping independent from SQL text and database exception
+classes.
+
 ### One-shot helpers on Aggo
 
 For simple single-statement writes, you can skip the `tx { }` block entirely:
