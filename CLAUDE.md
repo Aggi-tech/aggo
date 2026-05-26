@@ -12,16 +12,51 @@ Read this document before touching any file in `libs/aggo/`.
 ## Architecture map
 
 ```
-schema/         ← Declarative layer: Codec, Column, Table, Checks
-query/          ← Immutable AST: Select, Insert, Update, Delete, Predicate, Operand
-dsl/            ← Builder DSL: select {...}, insert {...}, update {...}, delete {...}
-render/         ← SQL generation: renderSelect/Insert/Update/Delete + RenderContext
-runtime/        ← Execution: Aggo, Session, AggoPool, Binder, Logging
+schema/         ← Declarative layer: Codec, Column, Table, Checks, ForeignKey
+query/          ← Immutable AST: Select, Insert, Update, Delete, Predicate, Operand, Expr
+dsl/            ← Builder DSL: select {...}, insert {...}, update {...}, delete {...},
+                   aggregate {...}, ExprOperators (arithmetic + aggregate functions)
+render/         ← SQL generation: renderSelect/Insert/Update/Delete/AggregateSelect + RenderContext
+runtime/        ← Execution: Aggo, Session, AggoPool, Binder, Logging, AggRow
 dialect/        ← SQL dialect abstraction: SqlDialect, PostgresDialect
+migration/      ← DDL generation: migrationPlan, migrationSchema, MigrationGenerator
 ```
 
 Data flows in one direction: **schema → dsl → query AST → render → runtime**.
 Nothing flows backwards. Renderers never call Session; Session never calls DSL builders.
+
+---
+
+## Context separation — strict boundaries
+
+Each package has a single responsibility. **Never add capabilities from one context into another.**
+
+| Context | Package | What it can do | What it cannot do |
+|---------|---------|----------------|-------------------|
+| **Schema** | `schema/` | Declare tables, columns, FK relationships, checks | Generate SQL, bind parameters, open connections |
+| **Query AST** | `query/` | Represent immutable query structures, expressions | Execute queries, touch connections |
+| **DSL** | `dsl/` | Compose query AST via Kotlin-idiomatic builders | Access connections, generate DDL |
+| **Render** | `render/` | Produce SQL strings + bound parameters from AST | Execute SQL, read results |
+| **Migration** | `migration/` | Generate DDL, diff schemas, snapshot state | Execute DML, hold connections |
+| **Runtime** | `runtime/` | Execute queries via R2DBC, manage transactions | Generate DDL, define schema |
+
+**The table declaration contract:**
+- `Table<E>` is a pure metadata descriptor — columns, FKs, codecs, and the `fromRow` mapper.
+- `Table` has **no DDL methods**. DDL belongs in `migration/`.
+- `Table` has **no connection**. Execution belongs in `runtime/`.
+- The `column()` and `references()` builders are `protected` — only callable during object construction.
+
+**The migration contract:**
+- All DDL generation requires a `MigrationDialect` parameter (identifier quoting + type mapping).
+- Entry points: `migrationSchema(version, tables, dialect)` → `migrationPlan(current, dialect)`.
+- Manual DDL helpers: `Table<*>.addCheckConstraintsSql(dialect)`, `Table<*>.addForeignKeyConstraintsSql(dialect)`.
+- These are extension functions in `migration/` — you must import `com.aggitech.aggo.migration.*` to use them.
+
+**The session contract:**
+- `Session` is the receiver inside `aggo.read {}` and `aggo.tx {}` blocks only.
+- `Session` executes DML (`fetchAll`, `insert`, `update`, `delete`, `fetchAggregate`).
+- `Session` cannot generate DDL. To apply migrations, use `session.applyMigration(plan)` which
+  receives a pre-built `MigrationPlan` from the migration layer.
 
 ---
 

@@ -51,6 +51,7 @@ abstract class Table<E>(val name: String) {
     }
 
     private val mutableColumns: MutableList<Column<E, *>> = mutableListOf()
+    private val mutableForeignKeys: MutableList<ForeignKey> = mutableListOf()
 
     /** Read-only view of declared columns, in declaration order. */
     val columns: List<Column<E, *>> get() = mutableColumns
@@ -59,6 +60,12 @@ abstract class Table<E>(val name: String) {
 
     /** Columns the application is expected to provide on INSERT (non-generated). */
     val writableColumns: List<Column<E, *>> get() = mutableColumns.filterNot { it.isGenerated }
+
+    /**
+     * All foreign key constraints declared on this table via [references].
+     * Used for DDL generation and migration diff.
+     */
+    val foreignKeys: List<ForeignKey> get() = mutableForeignKeys
 
     /**
      * Register a column. Returns the descriptor so it can be assigned to a `val`
@@ -402,31 +409,46 @@ abstract class Table<E>(val name: String) {
         sqlType = "VARCHAR(26)", getter = getter)
 
     /**
-     * Returns inline `CONSTRAINT … CHECK (…)` clauses for every column that
-     * declared a [check] expression. These can be embedded directly inside a
-     * `CREATE TABLE` block or used with [addCheckConstraintsSql].
-     */
-    fun checkConstraintClauses(): List<String> =
-        columns.mapNotNull { col ->
-            col.checkExpression?.let { expr ->
-                "CONSTRAINT chk_${name}_${col.name} CHECK (${expr(col.name)})"
-            }
-        }
-
-    /**
-     * Returns ready-to-run Postgres `ALTER TABLE … ADD CONSTRAINT …` statements
-     * for all columns with a [check] expression. Prefer the dialect-aware
-     * `com.aggitech.aggo.migration.addCheckConstraintsSql(dialect)` overload for
-     * new code.
+     * Declares a FOREIGN KEY relationship from this column to [target].
      *
-     * Example output:
-     * ```sql
-     * ALTER TABLE "payers" ADD CONSTRAINT chk_payers_email CHECK ("email" ~ '^[^@\s]+@[^@\s]+\.[^@\s]+$');
-     * ALTER TABLE "payers" ADD CONSTRAINT chk_payers_id CHECK (char_length("id") = 13);
+     * Must be called inside the `Table` object body immediately after the column
+     * declaration it relates to. Returns the same column so it can be chained
+     * fluently with the `column(...)` call.
+     *
+     * ```kotlin
+     * object OrdersTable : Table<Order>("orders") {
+     *     val id         = column("id", OrderIdCodec, isPrimaryKey = true) { it.id }
+     *     val customerId = column("customer_id", IntCodec) { it.customerId }
+     *         .references(CustomersTable.id, onDelete = ForeignKeyAction.CASCADE)
+     *     val productId  = column("product_id", IntCodec) { it.productId }
+     *         .references(ProductsTable.id)  // defaults: RESTRICT / RESTRICT
+     * }
      * ```
+     *
+     * The value type [V] must match on both sides — the compiler enforces that
+     * you can only reference a column that holds the same Kotlin type.
+     *
+     * [target] must be a `isPrimaryKey = true` or `UNIQUE` column on the parent
+     * table; Aggo does not enforce this at compile time but the database will.
+     *
+     * Generate DDL via `com.aggitech.aggo.migration.addForeignKeyConstraintsSql(dialect)`
+     * in your migration scripts — DDL generation belongs to the migration layer.
      */
-    fun addCheckConstraintsSql(): List<String> =
-        checkConstraintClauses().map { clause -> "ALTER TABLE \"$name\" ADD $clause;" }
+    protected fun <V, R> Column<E, V>.references(
+        target: Column<R, V>,
+        onDelete: ForeignKeyAction = ForeignKeyAction.RESTRICT,
+        onUpdate: ForeignKeyAction = ForeignKeyAction.RESTRICT,
+        constraintName: String? = null,
+    ): Column<E, V> {
+        mutableForeignKeys += ForeignKey(
+            column = this,
+            referencedColumn = target,
+            onDelete = onDelete,
+            onUpdate = onUpdate,
+            constraintName = constraintName,
+        )
+        return this
+    }
 
     /**
      * Build an entity from a result Row. Implementations should call

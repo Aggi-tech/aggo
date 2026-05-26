@@ -1,14 +1,17 @@
 package com.aggitech.aggo.runtime
 
 import com.aggitech.aggo.dialect.SqlDialect
+import com.aggitech.aggo.dsl.AggregateBuilder
 import com.aggitech.aggo.dsl.DeleteBuilder
 import com.aggitech.aggo.dsl.InsertBuilder
 import com.aggitech.aggo.dsl.SelectBuilder
 import com.aggitech.aggo.dsl.UpdateBuilder
+import com.aggitech.aggo.dsl.aggregate
 import com.aggitech.aggo.migration.MigrationFileEntry
 import com.aggitech.aggo.migration.MigrationPlan
 import com.aggitech.aggo.migration.MigrationStep
 import com.aggitech.aggo.migration.computeChecksum
+import com.aggitech.aggo.query.AggregateSelect
 import com.aggitech.aggo.query.Delete
 import com.aggitech.aggo.query.Insert
 import com.aggitech.aggo.query.JoinSelect
@@ -16,6 +19,7 @@ import com.aggitech.aggo.query.JoinedRow
 import com.aggitech.aggo.query.Select
 import com.aggitech.aggo.query.Update
 import com.aggitech.aggo.render.RenderedSql
+import com.aggitech.aggo.render.renderAggregateSelect
 import com.aggitech.aggo.render.renderDelete
 import com.aggitech.aggo.render.renderInsert
 import com.aggitech.aggo.render.renderJoinSelect
@@ -163,6 +167,60 @@ class Session internal constructor(
             mapped.collect { value -> emit(value) }
         }
     }
+
+    // ----- AGGREGATE SELECT -----------------------------------------------
+
+    /**
+     * Executes a GROUP BY / aggregate SELECT and returns all result rows as [AggRow] values.
+     *
+     * Each row's values are decoded by indexing with [com.aggitech.aggo.query.NamedExpr] keys:
+     *
+     * ```kotlin
+     * val total = count(Orders.id) `as` "total"
+     * val avg   = avg(Orders.amount) `as` "avg_amount"
+     *
+     * val results = aggo.read {
+     *     fetchAggregate(aggregate(Orders) {
+     *         project(total)
+     *         project(avg)
+     *         where { Orders.active eq true }
+     *         groupBy(Orders.customerId)
+     *         having { count(Orders.id) gt 0L }
+     *         limit(50)
+     *     })
+     * }
+     *
+     * results.map { row -> row[total]!! to row[avg]!! }
+     * ```
+     */
+    suspend fun <E> fetchAggregate(query: AggregateSelect<E>): List<AggRow> =
+        streamAggregate(query).toList()
+
+    /** Builder-block form of [fetchAggregate]. */
+    suspend fun <E> fetchAggregate(
+        table: Table<E>,
+        block: AggregateBuilder<E>.() -> Unit,
+    ): List<AggRow> = fetchAggregate(aggregate(table, block))
+
+    /**
+     * Streaming form of [fetchAggregate]. Returns a cold [Flow] of [AggRow] values.
+     * Prefer this over [fetchAggregate] when result sets may be very large.
+     *
+     * The flow must be collected inside the same [Aggo.read] or [Aggo.tx] block.
+     */
+    fun <E> streamAggregate(query: AggregateSelect<E>): Flow<AggRow> = flow {
+        val rendered = renderAggregateSelect(query, dialect)
+        executeForResults(rendered).asResultFlow().collect { result ->
+            val mapped: Publisher<AggRow> = result.map { row, _ -> AggRow(row, query.projections) }
+            mapped.collect { value -> emit(value) }
+        }
+    }
+
+    /** Builder-block form of [streamAggregate]. */
+    fun <E> streamAggregate(
+        table: Table<E>,
+        block: AggregateBuilder<E>.() -> Unit,
+    ): Flow<AggRow> = streamAggregate(aggregate(table, block))
 
     // ----- INSERT ---------------------------------------------------------
 

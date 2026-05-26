@@ -76,6 +76,7 @@ data class MigrationTable(
     val columns: List<MigrationColumn>,
     val checks: List<MigrationCheck> = emptyList(),
     val primaryKey: List<String> = emptyList(),
+    val foreignKeys: List<MigrationForeignKey> = emptyList(),
 ) {
     init {
         require(columns.isNotEmpty()) { "migration table '$name' must have at least one column" }
@@ -97,6 +98,21 @@ data class MigrationColumn(
 data class MigrationCheck(
     val name: String,
     val expression: String,
+)
+
+/**
+ * Immutable FOREIGN KEY constraint metadata materialized from a [com.aggitech.aggo.schema.ForeignKey].
+ *
+ * Stored in [MigrationTable] and persisted in migration snapshots so the diff engine can
+ * detect added, modified, and dropped FK constraints between schema versions.
+ */
+data class MigrationForeignKey(
+    val name: String,
+    val column: String,
+    val referencedTable: String,
+    val referencedColumn: String,
+    val onDelete: String,
+    val onUpdate: String,
 )
 
 /** One migration statement plus a stable change note for review/versioning. */
@@ -153,6 +169,16 @@ fun Table<*>.toMigrationTable(dialect: MigrationDialect): MigrationTable =
             }
         },
         primaryKey = primaryKeys.map { it.name },
+        foreignKeys = foreignKeys.map { fk ->
+            MigrationForeignKey(
+                name = fk.effectiveName,
+                column = fk.column.name,
+                referencedTable = fk.referencedColumn.table.name,
+                referencedColumn = fk.referencedColumn.name,
+                onDelete = fk.onDelete.sql,
+                onUpdate = fk.onUpdate.sql,
+            )
+        },
     )
 
 /** Materializes a versioned schema snapshot from Aggo table descriptors. */
@@ -197,18 +223,31 @@ fun migrationPlan(
         current = current.customTypes,
     )
 
-    val tableSteps = if (previous == null) {
-        current.tables.map { table ->
+    val tableSteps: List<MigrationStep>
+    val fkSteps: List<MigrationStep>
+
+    if (previous == null) {
+        tableSteps = current.tables.map { table ->
             MigrationStep(
                 change = "create table ${table.name}",
                 sql = table.createTableSql(dialect, ifNotExists = ifNotExists),
             )
         }
+        // FK constraints come after all CREATE TABLE steps to avoid forward-reference issues.
+        fkSteps = current.tables.flatMap { table ->
+            table.foreignKeys.map { fk ->
+                MigrationStep(
+                    change = "add foreign key ${table.name}.${fk.name}",
+                    sql = buildFkAlterTable(table.name, fk, dialect),
+                )
+            }
+        }
     } else {
-        diffSchemas(previous, current, dialect, ifNotExists)
+        tableSteps = diffSchemas(previous, current, dialect, ifNotExists)
+        fkSteps = emptyList()  // FK diffs are handled inside diffSchemas → diffTable
     }
 
-    return MigrationPlan(previous?.version, current.version, customTypeSteps + tableSteps)
+    return MigrationPlan(previous?.version, current.version, customTypeSteps + tableSteps + fkSteps)
 }
 
 /**
@@ -257,20 +296,48 @@ fun MigrationTable.createTableSql(dialect: MigrationDialect, ifNotExists: Boolea
 }
 
 /**
- * Returns `ALTER TABLE … ADD CONSTRAINT …` statements for an Aggo table.
+ * Returns `ALTER TABLE … ADD CONSTRAINT … CHECK …` statements for an Aggo table.
  *
- * Prefer this overload over [Table.addCheckConstraintsSql] because it uses the
- * configured dialect for identifier quoting.
+ * Uses the configured dialect for identifier quoting. This is the preferred entry point
+ * for generating CHECK constraint DDL — it belongs to the migration layer, not the schema layer.
+ *
+ * ```kotlin
+ * UsersTable.addCheckConstraintsSql(PostgresDialect).forEach { println(it) }
+ * ```
  */
 fun Table<*>.addCheckConstraintsSql(dialect: MigrationDialect): List<String> =
     toMigrationTable(dialect).addCheckConstraintsSql(dialect)
 
-/** Returns `ALTER TABLE … ADD CONSTRAINT …` statements for a table snapshot. */
+/** Returns `ALTER TABLE … ADD CONSTRAINT … CHECK …` statements for a table snapshot. */
 fun MigrationTable.addCheckConstraintsSql(dialect: MigrationDialect): List<String> =
     checks.map { check ->
         "ALTER TABLE ${dialect.quoteIdentifier(name)} ADD CONSTRAINT " +
             "${dialect.quoteIdentifier(check.name)} CHECK (${check.expression});"
     }
+
+/**
+ * Returns `ALTER TABLE … ADD CONSTRAINT … FOREIGN KEY …` statements for an Aggo table.
+ *
+ * Emits one `ALTER TABLE` statement per declared [com.aggitech.aggo.schema.ForeignKey].
+ * Because FK constraints reference other tables they are always emitted separately —
+ * never inline in `CREATE TABLE` — to avoid forward-reference issues.
+ *
+ * Use this in manual migration scripts when you need to add FK constraints to an
+ * existing database, or when generating a migration outside of [migrationPlan].
+ *
+ * ```kotlin
+ * OrdersTable.addForeignKeyConstraintsSql(PostgresDialect).forEach { println(it) }
+ * // → ALTER TABLE "orders" ADD CONSTRAINT "fk_orders_customer_id"
+ * //     FOREIGN KEY ("customer_id") REFERENCES "customers" ("id")
+ * //     ON DELETE CASCADE ON UPDATE RESTRICT;
+ * ```
+ */
+fun Table<*>.addForeignKeyConstraintsSql(dialect: MigrationDialect): List<String> =
+    toMigrationTable(dialect).addForeignKeyConstraintsSql(dialect)
+
+/** Returns `ALTER TABLE … ADD CONSTRAINT … FOREIGN KEY …` statements for a table snapshot. */
+fun MigrationTable.addForeignKeyConstraintsSql(dialect: MigrationDialect): List<String> =
+    foreignKeys.map { fk -> buildFkAlterTable(name, fk, dialect) }
 
 /**
  * Returns a `DROP TABLE` statement for this table.
@@ -407,12 +474,42 @@ private fun diffTable(
         )
     }
 
+    val previousFks = previous.foreignKeys.associateBy { it.name }
+    val currentFks = current.foreignKeys.associateBy { it.name }
+    for (fk in current.foreignKeys) {
+        val old = previousFks[fk.name]
+        when {
+            old == null -> steps += MigrationStep(
+                change = "add foreign key ${current.name}.${fk.name}",
+                sql = buildFkAlterTable(current.name, fk, dialect),
+            )
+            old != fk -> steps += MigrationStep(
+                change = "change foreign key ${current.name}.${fk.name}",
+                requiresManualMigration = true,
+            )
+        }
+    }
+    for (fk in previous.foreignKeys) {
+        if (fk.name !in currentFks) {
+            steps += MigrationStep(
+                change = "drop foreign key ${current.name}.${fk.name}",
+                requiresManualMigration = true,
+            )
+        }
+    }
+
     return steps
 }
 
 private fun dropNotNullSql(tableName: String, column: MigrationColumn, dialect: MigrationDialect): String =
     "ALTER TABLE ${dialect.quoteIdentifier(tableName)} ALTER COLUMN " +
         "${dialect.quoteIdentifier(column.name)} DROP NOT NULL;"
+
+internal fun buildFkAlterTable(tableName: String, fk: MigrationForeignKey, dialect: SqlDialect): String =
+    "ALTER TABLE ${dialect.quoteIdentifier(tableName)} ADD CONSTRAINT ${dialect.quoteIdentifier(fk.name)} " +
+        "FOREIGN KEY (${dialect.quoteIdentifier(fk.column)}) " +
+        "REFERENCES ${dialect.quoteIdentifier(fk.referencedTable)} (${dialect.quoteIdentifier(fk.referencedColumn)}) " +
+        "ON DELETE ${fk.onDelete} ON UPDATE ${fk.onUpdate};"
 
 private fun diffCustomTypes(
     previous: List<MigrationCustomType>,

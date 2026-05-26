@@ -1,10 +1,17 @@
 package com.aggitech.aggo
 
 import com.aggitech.aggo.dialect.PostgresDialect
+import com.aggitech.aggo.dsl.aggregate
 import com.aggitech.aggo.dsl.and
+import com.aggitech.aggo.dsl.avg
 import com.aggitech.aggo.dsl.between
+import com.aggitech.aggo.dsl.coalesce
+import com.aggitech.aggo.dsl.count
+import com.aggitech.aggo.dsl.countDistinct
+import com.aggitech.aggo.dsl.countStar
 import com.aggitech.aggo.dsl.delete
 import com.aggitech.aggo.dsl.eq
+import com.aggitech.aggo.dsl.gt
 import com.aggitech.aggo.dsl.gte
 import com.aggitech.aggo.dsl.inList
 import com.aggitech.aggo.dsl.insert
@@ -12,11 +19,18 @@ import com.aggitech.aggo.dsl.isNotNull
 import com.aggitech.aggo.dsl.leftJoin
 import com.aggitech.aggo.dsl.limit
 import com.aggitech.aggo.dsl.like
+import com.aggitech.aggo.dsl.lower
+import com.aggitech.aggo.dsl.minus
 import com.aggitech.aggo.dsl.orderBy
 import com.aggitech.aggo.dsl.or
+import com.aggitech.aggo.dsl.plus
 import com.aggitech.aggo.dsl.select
+import com.aggitech.aggo.dsl.sum
+import com.aggitech.aggo.dsl.times
 import com.aggitech.aggo.dsl.update
+import com.aggitech.aggo.dsl.upper
 import com.aggitech.aggo.dsl.where
+import com.aggitech.aggo.render.renderAggregateSelect
 import com.aggitech.aggo.render.renderDelete
 import com.aggitech.aggo.render.renderInsert
 import com.aggitech.aggo.render.renderJoinSelect
@@ -177,5 +191,166 @@ class RendererTest : StringSpec({
 
         val r2 = renderDelete(delete(People), PostgresDialect)
         r2.sql shouldBe """DELETE FROM "people""""
+    }
+
+    // ── Expression operators ────────────────────────────────────────────────
+
+    "arithmetic column + literal renders parenthesised binary expr in WHERE" {
+        val q = select(People) { where { (People.id + 10) gt 20 } }
+        val r = renderSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" """ +
+            """WHERE ("people"."id" + ${'$'}1) > ${'$'}2"""
+        r.params.map { it.value } shouldBe listOf(10, 20)
+    }
+
+    "arithmetic column - column renders subtraction expr in WHERE" {
+        val q = select(Pets) { where { (Pets.id - Pets.ownerId) gt 0 } }
+        val r = renderSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT "id", "owner_id", "name" FROM "pets" """ +
+            """WHERE ("pets"."id" - "pets"."owner_id") > ${'$'}1"""
+        r.params.map { it.value } shouldBe listOf(0)
+    }
+
+    "string column + literal renders SQL || concatenation in WHERE" {
+        val q = select(People) { where { (People.fullName + "!") eq "Alice!" } }
+        val r = renderSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" """ +
+            """WHERE ("people"."name" || ${'$'}1) = ${'$'}2"""
+        r.params.map { it.value } shouldBe listOf("!", "Alice!")
+    }
+
+    "string column + column renders SQL || between two columns" {
+        val q = select(People) { where { (People.fullName + People.fullName) eq "AliceAlice" } }
+        val r = renderSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" """ +
+            """WHERE ("people"."name" || "people"."name") = ${'$'}1"""
+    }
+
+    "upper function renders UPPER() in WHERE" {
+        val q = select(People) { where { upper(People.fullName) eq "ALICE" } }
+        val r = renderSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" """ +
+            """WHERE UPPER("people"."name") = ${'$'}1"""
+        r.params.map { it.value } shouldBe listOf("ALICE")
+    }
+
+    "lower function renders LOWER() in WHERE" {
+        val q = select(People) { where { lower(People.fullName) eq "alice" } }
+        val r = renderSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" """ +
+            """WHERE LOWER("people"."name") = ${'$'}1"""
+    }
+
+    "coalesce column + fallback renders COALESCE() in WHERE" {
+        val q = select(People) { where { coalesce(People.fullName, "unknown") eq "unknown" } }
+        val r = renderSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" """ +
+            """WHERE COALESCE("people"."name", ${'$'}1) = ${'$'}2"""
+        r.params.map { it.value } shouldBe listOf("unknown", "unknown")
+    }
+
+    // ── Aggregate SELECT ────────────────────────────────────────────────────
+
+    "aggregate with countStar renders COUNT(*) projection" {
+        val cnt = countStar() `as` "cnt"
+        val q = aggregate(People) { project(cnt) }
+        val r = renderAggregateSelect(q, PostgresDialect)
+        r.sql shouldBe """SELECT COUNT(*) AS "cnt" FROM "people""""
+        r.params shouldHaveSize 0
+    }
+
+    "aggregate with count column renders COUNT projection" {
+        val cnt = count(People.id) `as` "cnt"
+        val q = aggregate(People) { project(cnt) }
+        val r = renderAggregateSelect(q, PostgresDialect)
+        r.sql shouldBe """SELECT COUNT("people"."id") AS "cnt" FROM "people""""
+    }
+
+    "aggregate with countDistinct renders COUNT(DISTINCT ...)" {
+        val cnt = countDistinct(People.fullName) `as` "unique_names"
+        val q = aggregate(People) { project(cnt) }
+        val r = renderAggregateSelect(q, PostgresDialect)
+        r.sql shouldBe """SELECT COUNT(DISTINCT "people"."name") AS "unique_names" FROM "people""""
+    }
+
+    "aggregate with sum and groupBy renders full GROUP BY query" {
+        val total = sum(People.id) `as` "total"
+        val q = aggregate(People) {
+            project(total)
+            groupBy(People.active)
+        }
+        val r = renderAggregateSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT SUM("people"."id") AS "total" FROM "people" """ +
+            """GROUP BY "people"."active""""
+    }
+
+    "aggregate with avg renders AVG() projection" {
+        val mean = avg(People.id) `as` "mean"
+        val q = aggregate(People) { project(mean) }
+        val r = renderAggregateSelect(q, PostgresDialect)
+        r.sql shouldBe """SELECT AVG("people"."id") AS "mean" FROM "people""""
+    }
+
+    "aggregate with where and having renders both clauses" {
+        val cnt = count(People.id) `as` "cnt"
+        val q = aggregate(People) {
+            project(cnt)
+            where { People.active eq true }
+            groupBy(People.active)
+            having { count(People.id) gt 0L }
+        }
+        val r = renderAggregateSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT COUNT("people"."id") AS "cnt" FROM "people" """ +
+            """WHERE "people"."active" = ${'$'}1 """ +
+            """GROUP BY "people"."active" """ +
+            """HAVING COUNT("people"."id") > ${'$'}2"""
+        r.params.map { it.value } shouldBe listOf(true, 0L)
+    }
+
+    "aggregate with orderBy and limit renders ORDER BY + LIMIT" {
+        val cnt = countStar() `as` "cnt"
+        val q = aggregate(People) {
+            project(cnt)
+            groupBy(People.active)
+            orderBy { cnt.desc() }
+            limit(10)
+        }
+        val r = renderAggregateSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT COUNT(*) AS "cnt" FROM "people" """ +
+            """GROUP BY "people"."active" """ +
+            """ORDER BY COUNT(*) DESC """ +
+            """LIMIT 10"""
+    }
+
+    "aggregate with multiple projections renders all columns" {
+        val cnt = count(People.id) `as` "cnt"
+        val total = sum(People.id) `as` "total"
+        val q = aggregate(People) {
+            project(cnt)
+            project(total)
+        }
+        val r = renderAggregateSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT COUNT("people"."id") AS "cnt", SUM("people"."id") AS "total" FROM "people""""
+    }
+
+    "chained arithmetic expr renders nested parentheses" {
+        // (id + 1) * 2
+        val q = select(People) { where { ((People.id + 1) * 2) gt 10 } }
+        val r = renderSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" """ +
+            """WHERE (("people"."id" + ${'$'}1) * ${'$'}2) > ${'$'}3"""
+        r.params.map { it.value } shouldBe listOf(1, 2, 10)
     }
 })

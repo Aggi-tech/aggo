@@ -1,8 +1,10 @@
 package com.aggitech.aggo.render
 
 import com.aggitech.aggo.dialect.SqlDialect
+import com.aggitech.aggo.query.AggregateSelect
 import com.aggitech.aggo.query.Assignment
 import com.aggitech.aggo.query.Delete
+import com.aggitech.aggo.query.Expr
 import com.aggitech.aggo.query.Insert
 import com.aggitech.aggo.query.JoinSelect
 import com.aggitech.aggo.query.Select
@@ -132,6 +134,58 @@ fun renderDelete(query: Delete<*>, dialect: SqlDialect): RenderedSql {
     }
     return RenderedSql(sql, ctx.params)
 }
+
+/**
+ * Render an [AggregateSelect] — `SELECT expr AS alias, ... FROM table
+ * [WHERE ...] [GROUP BY ...] [HAVING ...] [ORDER BY ...] [LIMIT/OFFSET]`.
+ *
+ * Each projection renders as `expr AS "alias"` using the column alias registered via
+ * `expr `as` "alias"`. Results are decoded through [com.aggitech.aggo.runtime.AggRow].
+ */
+fun renderAggregateSelect(query: AggregateSelect<*>, dialect: SqlDialect): RenderedSql {
+    val ctx = RenderContext(dialect)
+    val table = dialect.quoteIdentifier(query.table.name)
+
+    val projections = query.projections.joinToString(", ") { ne ->
+        "${PredicateRenderer.renderOperand(ne.expr.operand, ctx)} AS ${dialect.quoteIdentifier(ne.label)}"
+    }
+
+    val sql = buildString {
+        append("SELECT ").append(projections)
+        append(" FROM ").append(table)
+
+        query.where?.let {
+            append(" WHERE ").append(PredicateRenderer.render(it, ctx))
+        }
+
+        if (query.groupBy.isNotEmpty()) {
+            append(" GROUP BY ")
+            append(query.groupBy.joinToString(", ") { col ->
+                "${dialect.quoteIdentifier(col.table.name)}.${dialect.quoteIdentifier(col.name)}"
+            })
+        }
+
+        query.having?.let {
+            append(" HAVING ").append(PredicateRenderer.render(it, ctx))
+        }
+
+        if (query.orderBy.isNotEmpty()) {
+            append(" ORDER BY ")
+            append(query.orderBy.joinToString(", ") { o ->
+                "${PredicateRenderer.renderOperand(o.expr.operand, ctx)} ${o.direction.name}"
+            })
+        }
+
+        query.limit?.let { append(" LIMIT ").append(it) }
+        query.offset?.let { append(" OFFSET ").append(it) }
+    }
+
+    return RenderedSql(sql, ctx.params)
+}
+
+/** Renders a single [Expr] to SQL string using the given [RenderContext]. */
+fun renderExpr(expr: Expr<*>, ctx: RenderContext): String =
+    PredicateRenderer.renderOperand(expr.operand, ctx)
 
 private fun <V> bindAssignment(a: Assignment<*, V>, ctx: RenderContext): String =
     ctx.bind(a.value, a.codec, a.column)

@@ -48,7 +48,20 @@ internal fun MigrationSchema.toJson(): String = buildString {
         appendLine("      ],")
         append("      \"primaryKey\": [")
         append(table.primaryKey.joinToString(",") { jsonString(it) })
-        appendLine("]")
+        appendLine("],")
+        appendLine("      \"foreignKeys\": [")
+        table.foreignKeys.forEachIndexed { fi, fk ->
+            val comma = if (fi < table.foreignKeys.lastIndex) "," else ""
+            appendLine("        {" +
+                "\"name\":${jsonString(fk.name)}," +
+                "\"column\":${jsonString(fk.column)}," +
+                "\"referencedTable\":${jsonString(fk.referencedTable)}," +
+                "\"referencedColumn\":${jsonString(fk.referencedColumn)}," +
+                "\"onDelete\":${jsonString(fk.onDelete)}," +
+                "\"onUpdate\":${jsonString(fk.onUpdate)}" +
+                "}$comma")
+        }
+        appendLine("      ]")
         val tableComma = if (ti < tables.lastIndex) "," else ""
         appendLine("    }$tableComma")
     }
@@ -129,7 +142,22 @@ internal fun migrationSchemaFromJson(json: String): MigrationSchema {
         val primaryKey = (t["primaryKey"] as? List<*> ?: emptyList<Any>())
             .filterIsInstance<String>()
 
-        MigrationTable(name = name, columns = columns, checks = checks, primaryKey = primaryKey)
+        @Suppress("UNCHECKED_CAST")
+        val foreignKeysRaw = t["foreignKeys"] as? List<*> ?: emptyList<Any>()
+        val foreignKeys = foreignKeysRaw.map { fkRaw ->
+            @Suppress("UNCHECKED_CAST")
+            val f = fkRaw as Map<String, Any>
+            MigrationForeignKey(
+                name = f["name"] as? String ?: throw IllegalArgumentException("foreignKey missing 'name'"),
+                column = f["column"] as? String ?: throw IllegalArgumentException("foreignKey missing 'column'"),
+                referencedTable = f["referencedTable"] as? String ?: throw IllegalArgumentException("foreignKey missing 'referencedTable'"),
+                referencedColumn = f["referencedColumn"] as? String ?: throw IllegalArgumentException("foreignKey missing 'referencedColumn'"),
+                onDelete = f["onDelete"] as? String ?: "RESTRICT",
+                onUpdate = f["onUpdate"] as? String ?: "RESTRICT",
+            )
+        }
+
+        MigrationTable(name = name, columns = columns, checks = checks, primaryKey = primaryKey, foreignKeys = foreignKeys)
     }
 
     @Suppress("UNCHECKED_CAST")

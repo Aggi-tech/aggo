@@ -4,6 +4,53 @@ import com.aggitech.aggo.schema.Codec
 import com.aggitech.aggo.schema.Column
 import com.aggitech.aggo.schema.Table
 
+/** Ordering on an [Expr] for use in `aggregate { orderBy { ... } }` blocks. */
+data class AggOrdering(val expr: Expr<*>, val direction: OrderDir)
+
+/**
+ * A GROUP BY / aggregate SELECT query. Produces typed rows readable through
+ * [com.aggitech.aggo.runtime.AggRow]. Execute with
+ * [com.aggitech.aggo.runtime.Session.fetchAggregate] or
+ * [com.aggitech.aggo.runtime.Session.streamAggregate].
+ *
+ * Build with the [com.aggitech.aggo.dsl.aggregate] DSL function.
+ *
+ * ```kotlin
+ * val total = count(Orders.id) `as` "total"
+ * val avgAmt = avg(Orders.amount) `as` "avg_amount"
+ *
+ * val q = aggregate(Orders) {
+ *     project(total)
+ *     project(avgAmt)
+ *     where { Orders.active eq true }
+ *     groupBy(Orders.customerId)
+ *     having { count(Orders.id) gt 0L }
+ *     orderBy { avgAmt.desc() }
+ *     limit(100)
+ * }
+ *
+ * aggo.read {
+ *     fetchAggregate(q).map { row -> row[total]!! to row[avgAmt]!! }
+ * }
+ * ```
+ */
+data class AggregateSelect<E>(
+    val table: Table<E>,
+    val projections: List<NamedExpr<*>>,
+    val where: Predicate? = null,
+    val groupBy: List<Column<E, *>> = emptyList(),
+    val having: Predicate? = null,
+    val orderBy: List<AggOrdering> = emptyList(),
+    val limit: Int? = null,
+    val offset: Int? = null,
+) {
+    init {
+        require(projections.isNotEmpty()) { "AggregateSelect requires at least one projection" }
+        if (limit != null) require(limit in 0..Select.MAX_LIMIT) { "limit out of range: $limit" }
+        if (offset != null) require(offset >= 0) { "offset must be >= 0: $offset" }
+    }
+}
+
 /** Direction for ORDER BY clauses. */
 enum class OrderDir { ASC, DESC }
 

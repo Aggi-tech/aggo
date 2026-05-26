@@ -72,6 +72,18 @@ internal object PredicateRenderer {
             val raw = operand as Operand.Literal<Any?>
             ctx.bind(raw.value, raw.codec, column)
         }
+        is Operand.BinaryExpr -> {
+            // Always parenthesised to guarantee precedence — (left op right).
+            val left = renderOperand(operand.left, ctx)
+            val right = renderOperand(operand.right, ctx)
+            "($left ${operand.op.symbol} $right)"
+        }
+        is Operand.FunctionCall -> {
+            val distinctStr = if (operand.distinct) "DISTINCT " else ""
+            val args = operand.args.joinToString(", ") { arg -> renderOperand(arg, ctx) }
+            "${operand.name}($distinctStr$args)"
+        }
+        is Operand.Star -> "*"
     }
 
     private fun Operand.columnRef(): com.aggitech.aggo.schema.Column<*, *>? =
