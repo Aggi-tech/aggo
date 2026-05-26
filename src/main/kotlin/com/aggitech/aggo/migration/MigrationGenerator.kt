@@ -75,6 +75,7 @@ data class MigrationTable(
     val name: String,
     val columns: List<MigrationColumn>,
     val checks: List<MigrationCheck> = emptyList(),
+    val uniques: List<MigrationUnique> = emptyList(),
     val primaryKey: List<String> = emptyList(),
     val foreignKeys: List<MigrationForeignKey> = emptyList(),
 ) {
@@ -98,6 +99,12 @@ data class MigrationColumn(
 data class MigrationCheck(
     val name: String,
     val expression: String,
+)
+
+/** Immutable UNIQUE constraint metadata. */
+data class MigrationUnique(
+    val name: String,
+    val columns: List<String>,
 )
 
 /**
@@ -160,11 +167,19 @@ fun Table<*>.toMigrationTable(dialect: MigrationDialect): MigrationTable =
                 generated = col.isGenerated,
             )
         },
-        checks = columns.mapNotNull { col ->
-            col.checkExpression?.let { expr ->
+        checks = columns.flatMap { col ->
+            col.checkConstraints.map { check ->
                 MigrationCheck(
-                    name = "chk_${name}_${col.name}",
-                    expression = expr(col.name),
+                    name = check.effectiveName(name, col.name),
+                    expression = check.expression(col.name),
+                )
+            }
+        },
+        uniques = columns.mapNotNull { col ->
+            col.uniqueConstraint?.let { unique ->
+                MigrationUnique(
+                    name = unique.effectiveName(name, col.name),
+                    columns = listOf(col.name),
                 )
             }
         },
@@ -283,6 +298,11 @@ fun MigrationTable.createTableSql(dialect: MigrationDialect, ifNotExists: Boolea
         lines += "    CONSTRAINT ${dialect.quoteIdentifier(check.name)} CHECK (${check.expression})"
     }
 
+    for (unique in uniques) {
+        val uniqueCols = unique.columns.joinToString(", ") { dialect.quoteIdentifier(it) }
+        lines += "    CONSTRAINT ${dialect.quoteIdentifier(unique.name)} UNIQUE ($uniqueCols)"
+    }
+
     if (primaryKey.isNotEmpty()) {
         val pkCols = primaryKey.joinToString(", ") { dialect.quoteIdentifier(it) }
         lines += "    PRIMARY KEY ($pkCols)"
@@ -338,6 +358,14 @@ fun Table<*>.addForeignKeyConstraintsSql(dialect: MigrationDialect): List<String
 /** Returns `ALTER TABLE … ADD CONSTRAINT … FOREIGN KEY …` statements for a table snapshot. */
 fun MigrationTable.addForeignKeyConstraintsSql(dialect: MigrationDialect): List<String> =
     foreignKeys.map { fk -> buildFkAlterTable(name, fk, dialect) }
+
+/** Returns `ALTER TABLE … ADD CONSTRAINT … UNIQUE …` statements for an Aggo table. */
+fun Table<*>.addUniqueConstraintsSql(dialect: MigrationDialect): List<String> =
+    toMigrationTable(dialect).addUniqueConstraintsSql(dialect)
+
+/** Returns `ALTER TABLE … ADD CONSTRAINT … UNIQUE …` statements for a table snapshot. */
+fun MigrationTable.addUniqueConstraintsSql(dialect: MigrationDialect): List<String> =
+    uniques.map { unique -> buildUniqueAlterTable(name, unique, dialect) }
 
 /**
  * Returns a `DROP TABLE` statement for this table.
@@ -466,6 +494,30 @@ private fun diffTable(
         }
     }
 
+    val previousUniques = previous.uniques.associateBy { it.name }
+    val currentUniques = current.uniques.associateBy { it.name }
+    for (unique in current.uniques) {
+        val old = previousUniques[unique.name]
+        when {
+            old == null -> steps += MigrationStep(
+                change = "add unique ${current.name}.${unique.name}",
+                sql = buildUniqueAlterTable(current.name, unique, dialect),
+            )
+            old != unique -> steps += MigrationStep(
+                change = "change unique ${current.name}.${unique.name}",
+                requiresManualMigration = true,
+            )
+        }
+    }
+    for (unique in previous.uniques) {
+        if (unique.name !in currentUniques) {
+            steps += MigrationStep(
+                change = "drop unique ${current.name}.${unique.name}",
+                requiresManualMigration = true,
+            )
+        }
+    }
+
     if (previous.primaryKey != current.primaryKey) {
         steps += MigrationStep(
             change = "change primary key ${current.name}: " +
@@ -510,6 +562,12 @@ internal fun buildFkAlterTable(tableName: String, fk: MigrationForeignKey, diale
         "FOREIGN KEY (${dialect.quoteIdentifier(fk.column)}) " +
         "REFERENCES ${dialect.quoteIdentifier(fk.referencedTable)} (${dialect.quoteIdentifier(fk.referencedColumn)}) " +
         "ON DELETE ${fk.onDelete} ON UPDATE ${fk.onUpdate};"
+
+internal fun buildUniqueAlterTable(tableName: String, unique: MigrationUnique, dialect: SqlDialect): String {
+    val cols = unique.columns.joinToString(", ") { dialect.quoteIdentifier(it) }
+    return "ALTER TABLE ${dialect.quoteIdentifier(tableName)} ADD CONSTRAINT ${dialect.quoteIdentifier(unique.name)} " +
+        "UNIQUE ($cols);"
+}
 
 private fun diffCustomTypes(
     previous: List<MigrationCustomType>,
