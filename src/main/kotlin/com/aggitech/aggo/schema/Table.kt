@@ -143,69 +143,91 @@ abstract class Table<E>(val name: String) {
         return col
     }
 
+    /** Starts a fluent column declaration with an explicit [codec] and optional SQL type override. */
     protected fun <V> typed(
         name: String,
         codec: Codec<V>,
         sqlType: String? = null,
     ): ColumnBuilder<E, V> = ColumnBuilder(this, name, codec, sqlType)
 
+    /** Starts a fluent `VARCHAR(length)` column declaration. */
     protected fun varchar(name: String, length: Int = 255): ColumnBuilder<E, String> {
         require(length > 0) { "varchar length must be > 0, got $length" }
         return typed(name, StringCodec, sqlType = "VARCHAR($length)")
     }
 
+    /** Starts a fluent `VARCHAR(length)` declaration backed by a custom [codec]. */
     protected fun <V> varchar(name: String, length: Int = 255, codec: Codec<V>): ColumnBuilder<E, V> {
         require(length > 0) { "varchar length must be > 0, got $length" }
         return typed(name, codec, sqlType = "VARCHAR($length)")
     }
 
+    /** Starts a fluent `TEXT` column declaration. */
     protected fun text(name: String): ColumnBuilder<E, String> = typed(name, StringCodec, sqlType = "TEXT")
 
+    /** Starts a fluent `TEXT` declaration backed by a custom [codec]. */
     protected fun <V> text(name: String, codec: Codec<V>): ColumnBuilder<E, V> = typed(name, codec, sqlType = "TEXT")
 
+    /** Starts a fluent `INTEGER` column declaration. */
     protected fun integer(name: String): ColumnBuilder<E, Int> = typed(name, IntCodec, sqlType = "INTEGER")
 
+    /** Starts a fluent `BIGINT` column declaration. */
     protected fun bigint(name: String): ColumnBuilder<E, Long> = typed(name, LongCodec, sqlType = "BIGINT")
 
+    /** Starts a fluent `SMALLINT` column declaration. */
     protected fun smallint(name: String): ColumnBuilder<E, Short> = typed(name, ShortCodec, sqlType = "SMALLINT")
 
+    /** Starts a fluent `REAL` column declaration. */
     protected fun real(name: String): ColumnBuilder<E, Float> = typed(name, FloatCodec, sqlType = "REAL")
 
+    /** Starts a fluent `DOUBLE PRECISION` column declaration. */
     protected fun doublePrecision(name: String): ColumnBuilder<E, Double> =
         typed(name, DoubleCodec, sqlType = "DOUBLE PRECISION")
 
+    /** Starts a fluent `NUMERIC(precision, scale)` column declaration. */
     protected fun decimal(name: String, precision: Int, scale: Int): ColumnBuilder<E, BigDecimal> {
         require(precision > 0) { "decimal precision must be > 0, got $precision" }
         require(scale in 0..precision) { "decimal scale must be in 0..precision, got scale=$scale precision=$precision" }
         return typed(name, BigDecimalCodec, sqlType = "NUMERIC($precision, $scale)")
     }
 
+    /** Starts a fluent `BOOLEAN` column declaration. */
     protected fun boolean(name: String): ColumnBuilder<E, Boolean> = typed(name, BooleanCodec, sqlType = "BOOLEAN")
 
+    /** Starts a fluent `UUID` column declaration. */
     protected fun uuid(name: String): ColumnBuilder<E, UUID> = typed(name, UuidCodec, sqlType = "UUID")
 
+    /** Starts a fluent `TIMESTAMPTZ` column declaration. */
     protected fun timestamptz(name: String): ColumnBuilder<E, Instant> =
         typed(name, InstantCodec, sqlType = "TIMESTAMPTZ")
 
+    /** Starts a fluent `TIMESTAMP` column declaration. */
     protected fun timestamp(name: String): ColumnBuilder<E, LocalDateTime> =
         typed(name, LocalDateTimeCodec, sqlType = "TIMESTAMP")
 
+    /** Starts a fluent `DATE` column declaration. */
     protected fun date(name: String): ColumnBuilder<E, LocalDate> = typed(name, LocalDateCodec, sqlType = "DATE")
 
+    /** Starts a fluent `BYTEA` column declaration. */
     protected fun bytea(name: String): ColumnBuilder<E, ByteArray> = typed(name, ByteArrayCodec, sqlType = "BYTEA")
 
+    /** Starts a fluent TSID declaration and adds the default TSID CHECK constraint. */
     protected fun tsid(name: String): ColumnBuilder<E, Tsid> =
         typed(name, TsidCodec, sqlType = "VARCHAR(13)").check(Checks.tsid())
 
+    /** Starts a fluent TSID declaration backed by a custom [codec]. */
     protected fun <V> tsid(name: String, codec: Codec<V>): ColumnBuilder<E, V> =
         typed(name, codec, sqlType = "VARCHAR(13)").check(Checks.tsid())
 
+    /** Starts a fluent ULID declaration and adds the default ULID CHECK constraint. */
     protected fun ulid(name: String): ColumnBuilder<E, Ulid> =
         typed(name, UlidCodec, sqlType = "VARCHAR(26)").check(Checks.ulid())
 
+    /** Starts a fluent ULID declaration backed by a custom [codec]. */
     protected fun <V> ulid(name: String, codec: Codec<V>): ColumnBuilder<E, V> =
         typed(name, codec, sqlType = "VARCHAR(26)").check(Checks.ulid())
 
+    /** Starts a fluent enum column stored by [Enum.name] and constrained to declared enum values. */
     protected inline fun <reified V : Enum<V>> enumName(name: String, length: Int = 64): ColumnBuilder<E, V> =
         varchar(name, length, enumNameCodec<V>()).check(Checks.oneOf(*enumValues<V>().map { it.name }.toTypedArray()))
 
@@ -557,22 +579,40 @@ abstract class Table<E>(val name: String) {
         private val sensitive: Boolean = false,
         private val pendingForeignKey: PendingForeignKey<V>? = null,
     ) {
+        /** Marks the column as `NOT NULL` and keeps building the column. */
         fun required(): ColumnBuilder<T, V> = copy(isNullable = false)
+
+        /** Marks the column as `NOT NULL` and registers it with [getter]. */
         fun required(getter: (T) -> V?): Column<T, V> = required().map(getter)
 
+        /** Marks the column as nullable and keeps building the column. */
         fun optional(): ColumnBuilder<T, V> = copy(isNullable = true)
+
+        /** Marks the column as nullable and registers it with [getter]. */
         fun optional(getter: (T) -> V?): Column<T, V> = optional().map(getter)
 
+        /** Marks the column as part of the table primary key. Primary keys are always not-null. */
         fun primaryKey(): ColumnBuilder<T, V> = copy(isPrimaryKey = true, isNullable = false)
+
+        /** Marks the column as database-generated so INSERT builders skip it by default. */
         fun generated(): ColumnBuilder<T, V> = copy(isGenerated = true)
+
+        /** Redacts values from this column in query logs. */
         fun sensitive(): ColumnBuilder<T, V> = copy(sensitive = true)
 
+        /**
+         * Adds a named CHECK constraint.
+         *
+         * [key] is the stable application-facing key returned by typed error
+         * mapping when the database reports this constraint.
+         */
         fun check(
             check: (String) -> String,
             name: String? = null,
             key: String? = null,
         ): ColumnBuilder<T, V> = copy(checks = checks + CheckConstraint(check, name, key))
 
+        /** Adds a CHECK constraint and registers the column with [getter]. */
         fun check(
             check: (String) -> String,
             name: String? = null,
@@ -580,9 +620,20 @@ abstract class Table<E>(val name: String) {
             getter: (T) -> V?,
         ): Column<T, V> = check(check, name, key).map(getter)
 
+        /**
+         * Adds a single-column UNIQUE constraint.
+         *
+         * [key] is used by `constraintErrorMap(...)` to map violations into a
+         * typed [com.aggitech.aggo.runtime.ConstraintError].
+         */
         fun unique(name: String? = null, key: String? = null): ColumnBuilder<T, V> =
             copy(unique = UniqueConstraint(name, key))
 
+        /**
+         * Declares a foreign key to [target] and keeps building the column.
+         *
+         * The Kotlin value type must match the referenced column type.
+         */
         fun <R> references(
             target: Column<R, V>,
             onDelete: ForeignKeyAction = ForeignKeyAction.RESTRICT,
@@ -593,6 +644,7 @@ abstract class Table<E>(val name: String) {
             pendingForeignKey = PendingForeignKey(target, onDelete, onUpdate, constraintName, key)
         )
 
+        /** Declares a foreign key and registers the column with [getter]. */
         fun <R> references(
             target: Column<R, V>,
             onDelete: ForeignKeyAction = ForeignKeyAction.RESTRICT,
@@ -602,6 +654,7 @@ abstract class Table<E>(val name: String) {
             getter: (T) -> V?,
         ): Column<T, V> = references(target, onDelete, onUpdate, constraintName, key).map(getter)
 
+        /** Registers the final column in the owning table. */
         fun map(getter: (T) -> V?): Column<T, V> {
             val col = owner.column(
                 name = name,
@@ -629,6 +682,7 @@ abstract class Table<E>(val name: String) {
             return col
         }
 
+        /** Shorthand for [map], enabling `varchar("name").required() { it.name }`. */
         operator fun invoke(getter: (T) -> V?): Column<T, V> = map(getter)
 
         private fun copy(

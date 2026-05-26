@@ -164,7 +164,12 @@ val UlidCodec: Codec<Ulid> = ValueClassCodec(StringCodec, Ulid::parse, Ulid::val
 /** TSID stored as 13-char Crockford `text`. Validation happens in Tsid.parse. */
 val TsidCodec: Codec<Tsid> = ValueClassCodec(StringCodec, Tsid::parse, Tsid::value)
 
-/** Stores enum values by [Enum.name]. */
+/**
+ * Codec for enums stored by their stable [Enum.name].
+ *
+ * This backs `Table.enumName(...)` and is useful when the database column is a
+ * `VARCHAR` constrained with `Checks.oneOf(...)`.
+ */
 inline fun <reified E : Enum<E>> enumNameCodec(): Codec<E> = object : Codec<E> {
     override val sqlType: Class<*> = String::class.java
     override fun encode(value: E?): Any? = value?.name

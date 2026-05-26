@@ -150,6 +150,84 @@ injection through this surface.
 val embedding = column("embedding", ByteArrayCodec, sqlType = "VECTOR(1536)") { it.embedding }
 ```
 
+## Fluent schema builders
+
+The typed builders also support a fluent declaration style. This keeps
+nullability, primary keys, checks, unique constraints, and foreign keys close to
+the column type, similar to validation libraries such as Zod.
+
+```kotlin
+private enum class LeadStatus { NEW, QUALIFIED, LOST }
+
+object Leads : Table<Lead>("leads") {
+    val id = varchar("id", 26)
+        .required()
+        .primaryKey()
+        .check(Checks.ulid(), key = "lead.id.invalid") { it.id }
+
+    val email = varchar("email", 255)
+        .required()
+        .unique(key = "lead.email.taken")
+        .check(Checks.email(), key = "lead.email.invalid") { it.email }
+
+    val status = enumName<LeadStatus>("status")
+        .required() { it.status }
+
+    val notes = text("notes")
+        .optional() { it.notes }
+
+    val estimatedValue = decimal("estimated_value", precision = 12, scale = 2)
+        .optional()
+        .check(Checks.nonNegative(), key = "lead.estimated_value.negative") { it.estimatedValue }
+
+    override fun fromRow(row: Row) = Lead(
+        id = id.required(row),
+        email = email.required(row),
+        status = status.required(row),
+        notes = notes.nullable(row),
+        estimatedValue = estimatedValue.nullable(row),
+    )
+}
+```
+
+The chain is finalized by passing the entity getter to any terminal form:
+
+```kotlin
+val name = varchar("name", 160).required() { it.name }
+val slug = varchar("slug", 80).required().unique() { it.slug }
+val bio  = text("bio").optional() { it.bio }
+```
+
+You can also use `.map { ... }` when that reads better:
+
+```kotlin
+val ownerId = varchar("owner_id", 26)
+    .required()
+    .check(Checks.ulid())
+    .map { it.ownerId }
+```
+
+### Fluent modifiers
+
+| Modifier | Effect |
+|----------|--------|
+| `required()` | Emits `NOT NULL`; pairs naturally with `column.required(row)` |
+| `optional()` | Omits `NOT NULL`; pairs naturally with `column.nullable(row)` |
+| `primaryKey()` | Adds the column to `PRIMARY KEY (...)` and marks it not-null |
+| `generated()` | Skips the column in entity INSERTs |
+| `sensitive()` | Redacts values in query logs |
+| `check(expr, name, key)` | Adds a CHECK constraint with optional database name and error key |
+| `unique(name, key)` | Adds a single-column UNIQUE constraint |
+| `references(target, ..., key)` | Adds a FOREIGN KEY constraint |
+
+The old constructor-style API remains supported, so schemas can be migrated
+incrementally:
+
+```kotlin
+val legacy = column("legacy", StringCodec, check = Checks.notBlank()) { it.legacy }
+val fluent = varchar("fluent", 120).required().check(Checks.notBlank()) { it.fluent }
+```
+
 ## ValueClassCodec — wrapping domain types
 
 Use `ValueClassCodec` to create a codec for any `@JvmInline value class` (or any
@@ -191,6 +269,14 @@ val bio    = column("bio",    StringCodec, check = Checks.length(max = 500))    
 val code   = column("code",   StringCodec, check = Checks.matches("^[A-Z]{3}$")) { it.code }
 ```
 
+In fluent declarations, use `.check(...)`:
+
+```kotlin
+val email = varchar("email", 255)
+    .required()
+    .check(Checks.email(), key = "user.email.invalid") { it.email }
+```
+
 ### Composing constraints
 
 ```kotlin
@@ -230,6 +316,80 @@ val score = column("score", IntCodec,
 | `Checks.nonNegative()` | `"col" >= 0` |
 | `Checks.all(...)` | `(expr1) AND (expr2) AND ...` |
 | `Checks.any(...)` | `(expr1) OR (expr2) OR ...` |
+
+## UNIQUE constraints
+
+Use `.unique()` in the fluent builder to declare a single-column UNIQUE
+constraint.
+
+```kotlin
+val email = varchar("email", 255)
+    .required()
+    .unique(key = "user.email.taken")
+    .check(Checks.email(), key = "user.email.invalid") { it.email }
+```
+
+Generated DDL:
+
+```sql
+CONSTRAINT "uq_users_email" UNIQUE ("email")
+```
+
+The optional `name` controls the database constraint name. The optional `key`
+is application-facing metadata used by typed error mapping.
+
+```kotlin
+val handle = varchar("handle", 40)
+    .required()
+    .unique(name = "uq_users_handle", key = "user.handle.taken") { it.handle }
+```
+
+## Foreign keys with error keys
+
+Foreign keys can be declared in the fluent chain and can also carry an
+application-facing error key.
+
+```kotlin
+object Profiles : Table<Profile>("profiles") {
+    val userId = varchar("user_id", 26)
+        .required()
+        .references(
+            Users.id,
+            onDelete = ForeignKeyAction.CASCADE,
+            key = "profile.user.missing",
+        ) { it.userId }
+}
+```
+
+The database constraint still defaults to `fk_<table>_<column>`, for example
+`fk_profiles_user_id`. The key is only used when mapping database errors.
+
+## Constraint error mapping
+
+Checks, unique constraints, and foreign keys can be mapped to typed errors by
+building a `ConstraintErrorMap` from your table descriptors:
+
+```kotlin
+val errors = constraintErrorMap(Users, Profiles)
+
+val result = aggo.transaction(errors) {
+    insert(Users, user)
+}
+
+result.fold(
+    onSuccess = { rows -> rows },
+    onFailure = { error ->
+        when (error) {
+            is ConstraintError -> error.key
+            is DatabaseError -> "database.error"
+            else -> "unknown.error"
+        }
+    },
+)
+```
+
+Use stable keys such as `user.email.taken` or `profile.user.missing` in your API
+responses instead of exposing database constraint names.
 
 ## Reading rows — `required` and `nullable`
 
