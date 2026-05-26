@@ -40,21 +40,53 @@ data class Payer(
 )
 
 object Payers : Table<Payer>("payers") {
-    val id        = column("id",         IdCodec,     isPrimaryKey = true) { it.id }
-    val email     = column("email",      EmailCodec)                       { it.email }
-    val firstName = column("first_name", StringCodec)                      { it.firstName }
-    val active    = column("active",     BooleanCodec)                     { it.active }
-    val createdAt = column("created_at", InstantCodec, isGenerated = true) { it.createdAt }
+    val id = varchar("id", 26, IdCodec)
+        .required()
+        .primaryKey()
+        .check(Checks.ulid(), key = "payer.id.invalid") { it.id }
+
+    val email = varchar("email", 255, EmailCodec)
+        .required()
+        .unique(key = "payer.email.taken")
+        .check(Checks.email(), key = "payer.email.invalid") { it.email }
+
+    val firstName = varchar("first_name", 100)
+        .required()
+        .check(Checks.notBlank(), key = "payer.first_name.blank") { it.firstName }
+
+    val active = boolean("active")
+        .required() { it.active }
+
+    val createdAt = timestamptz("created_at")
+        .required()
+        .generated() { it.createdAt }
 
     override fun fromRow(row: Row) = Payer(
-        id        = id.readRequired(row),
-        email     = email.readRequired(row),
-        firstName = firstName.readRequired(row),
-        active    = active.readRequired(row),
-        createdAt = createdAt.readRequired(row),
+        id        = id.required(row),
+        email     = email.required(row),
+        firstName = firstName.required(row),
+        active    = active.required(row),
+        createdAt = createdAt.required(row),
     )
 }
 ```
+
+The legacy `column("name", Codec) { ... }` style remains supported. The fluent
+style is preferred for new schemas because the column type, nullability,
+constraints, and error keys stay in one chain:
+
+```kotlin
+val workspaceId = varchar("workspace_id", 26, WorkspaceIdCodec)
+    .required()
+    .references(Workspaces.id, key = "workspace.missing") { it.workspaceId }
+
+val status = enumName<PayerStatus>("status")
+    .required() { it.status }
+```
+
+Use `constraintErrorMap(Payers, Workspaces)` with typed transactions to map
+database CHECK, UNIQUE, and FOREIGN KEY failures into stable application error
+keys.
 
 ### 2. Build queries as composable blocks
 
@@ -93,6 +125,32 @@ aggo.tx { session ->
     })
 }
 ```
+
+For API handlers that should not catch database exceptions directly, use the
+typed-result helpers:
+
+```kotlin
+val errors = constraintErrorMap(Payers)
+
+val result: Transaction<Long, AggoError> = aggo.transaction(errors) {
+    insert(Payers, newPayer)
+}
+
+result.fold(
+    onSuccess = { rows -> rows },
+    onFailure = { error ->
+        when (error) {
+            is ConstraintError -> error.key       // e.g. "payer.email.taken"
+            is DatabaseError -> "database.error"
+            else -> "unknown.error"
+        }
+    },
+)
+```
+
+`Query<Success, Error>` and `Transaction<Success, Error>` support `map`,
+`flatMap`, and `fold`, so callers can compose database operations without
+throwing through application boundaries.
 
 ### 4. Fetch nested objects with LEFT JOIN
 
