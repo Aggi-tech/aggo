@@ -93,6 +93,30 @@ abstract class Table<E>(val name: String) {
         sensitive: Boolean = false,
         sqlType: String? = null,
         getter: (E) -> V?,
+    ): Column<E, V> = column(
+        name = name,
+        codec = codec,
+        isPrimaryKey = isPrimaryKey,
+        isGenerated = isGenerated,
+        isNullable = isNullable,
+        checks = check?.let { listOf(CheckConstraint(expression = it)) } ?: emptyList(),
+        unique = null,
+        sensitive = sensitive,
+        sqlType = sqlType,
+        getter = getter,
+    )
+
+    private fun <V> column(
+        name: String,
+        codec: Codec<V>,
+        isPrimaryKey: Boolean,
+        isGenerated: Boolean,
+        isNullable: Boolean,
+        checks: List<CheckConstraint>,
+        unique: UniqueConstraint?,
+        sensitive: Boolean,
+        sqlType: String?,
+        getter: (E) -> V?,
     ): Column<E, V> {
         // V-2: validate before mutating mutableColumns so a bad name does not
         // half-register a column. Duplicate-name check protects fromRow().
@@ -109,13 +133,81 @@ abstract class Table<E>(val name: String) {
             isPrimaryKey = isPrimaryKey,
             isGenerated = isGenerated,
             isNullable = isNullable,
-            checkExpression = check,
+            checkExpression = checks.firstOrNull()?.expression,
+            checkConstraints = checks,
+            uniqueConstraint = unique,
             sensitive = sensitive,
             sqlType = sqlType,
         )
         mutableColumns += col
         return col
     }
+
+    protected fun <V> typed(
+        name: String,
+        codec: Codec<V>,
+        sqlType: String? = null,
+    ): ColumnBuilder<E, V> = ColumnBuilder(this, name, codec, sqlType)
+
+    protected fun varchar(name: String, length: Int = 255): ColumnBuilder<E, String> {
+        require(length > 0) { "varchar length must be > 0, got $length" }
+        return typed(name, StringCodec, sqlType = "VARCHAR($length)")
+    }
+
+    protected fun <V> varchar(name: String, length: Int = 255, codec: Codec<V>): ColumnBuilder<E, V> {
+        require(length > 0) { "varchar length must be > 0, got $length" }
+        return typed(name, codec, sqlType = "VARCHAR($length)")
+    }
+
+    protected fun text(name: String): ColumnBuilder<E, String> = typed(name, StringCodec, sqlType = "TEXT")
+
+    protected fun <V> text(name: String, codec: Codec<V>): ColumnBuilder<E, V> = typed(name, codec, sqlType = "TEXT")
+
+    protected fun integer(name: String): ColumnBuilder<E, Int> = typed(name, IntCodec, sqlType = "INTEGER")
+
+    protected fun bigint(name: String): ColumnBuilder<E, Long> = typed(name, LongCodec, sqlType = "BIGINT")
+
+    protected fun smallint(name: String): ColumnBuilder<E, Short> = typed(name, ShortCodec, sqlType = "SMALLINT")
+
+    protected fun real(name: String): ColumnBuilder<E, Float> = typed(name, FloatCodec, sqlType = "REAL")
+
+    protected fun doublePrecision(name: String): ColumnBuilder<E, Double> =
+        typed(name, DoubleCodec, sqlType = "DOUBLE PRECISION")
+
+    protected fun decimal(name: String, precision: Int, scale: Int): ColumnBuilder<E, BigDecimal> {
+        require(precision > 0) { "decimal precision must be > 0, got $precision" }
+        require(scale in 0..precision) { "decimal scale must be in 0..precision, got scale=$scale precision=$precision" }
+        return typed(name, BigDecimalCodec, sqlType = "NUMERIC($precision, $scale)")
+    }
+
+    protected fun boolean(name: String): ColumnBuilder<E, Boolean> = typed(name, BooleanCodec, sqlType = "BOOLEAN")
+
+    protected fun uuid(name: String): ColumnBuilder<E, UUID> = typed(name, UuidCodec, sqlType = "UUID")
+
+    protected fun timestamptz(name: String): ColumnBuilder<E, Instant> =
+        typed(name, InstantCodec, sqlType = "TIMESTAMPTZ")
+
+    protected fun timestamp(name: String): ColumnBuilder<E, LocalDateTime> =
+        typed(name, LocalDateTimeCodec, sqlType = "TIMESTAMP")
+
+    protected fun date(name: String): ColumnBuilder<E, LocalDate> = typed(name, LocalDateCodec, sqlType = "DATE")
+
+    protected fun bytea(name: String): ColumnBuilder<E, ByteArray> = typed(name, ByteArrayCodec, sqlType = "BYTEA")
+
+    protected fun tsid(name: String): ColumnBuilder<E, Tsid> =
+        typed(name, TsidCodec, sqlType = "VARCHAR(13)").check(Checks.tsid())
+
+    protected fun <V> tsid(name: String, codec: Codec<V>): ColumnBuilder<E, V> =
+        typed(name, codec, sqlType = "VARCHAR(13)").check(Checks.tsid())
+
+    protected fun ulid(name: String): ColumnBuilder<E, Ulid> =
+        typed(name, UlidCodec, sqlType = "VARCHAR(26)").check(Checks.ulid())
+
+    protected fun <V> ulid(name: String, codec: Codec<V>): ColumnBuilder<E, V> =
+        typed(name, codec, sqlType = "VARCHAR(26)").check(Checks.ulid())
+
+    protected inline fun <reified V : Enum<V>> enumName(name: String, length: Int = 64): ColumnBuilder<E, V> =
+        varchar(name, length, enumNameCodec<V>()).check(Checks.oneOf(*enumValues<V>().map { it.name }.toTypedArray()))
 
     // ----- Typed column builders ------------------------------------------
     //
@@ -439,6 +531,7 @@ abstract class Table<E>(val name: String) {
         onDelete: ForeignKeyAction = ForeignKeyAction.RESTRICT,
         onUpdate: ForeignKeyAction = ForeignKeyAction.RESTRICT,
         constraintName: String? = null,
+        key: String? = null,
     ): Column<E, V> {
         mutableForeignKeys += ForeignKey(
             column = this,
@@ -446,9 +539,128 @@ abstract class Table<E>(val name: String) {
             onDelete = onDelete,
             onUpdate = onUpdate,
             constraintName = constraintName,
+            key = key,
         )
         return this
     }
+
+    protected inner class ColumnBuilder<T, V> internal constructor(
+        private val owner: Table<T>,
+        private val name: String,
+        private val codec: Codec<V>,
+        private val sqlType: String?,
+        private val isPrimaryKey: Boolean = false,
+        private val isGenerated: Boolean = false,
+        private val isNullable: Boolean = true,
+        private val checks: List<CheckConstraint> = emptyList(),
+        private val unique: UniqueConstraint? = null,
+        private val sensitive: Boolean = false,
+        private val pendingForeignKey: PendingForeignKey<V>? = null,
+    ) {
+        fun required(): ColumnBuilder<T, V> = copy(isNullable = false)
+        fun required(getter: (T) -> V?): Column<T, V> = required().map(getter)
+
+        fun optional(): ColumnBuilder<T, V> = copy(isNullable = true)
+        fun optional(getter: (T) -> V?): Column<T, V> = optional().map(getter)
+
+        fun primaryKey(): ColumnBuilder<T, V> = copy(isPrimaryKey = true, isNullable = false)
+        fun generated(): ColumnBuilder<T, V> = copy(isGenerated = true)
+        fun sensitive(): ColumnBuilder<T, V> = copy(sensitive = true)
+
+        fun check(
+            check: (String) -> String,
+            name: String? = null,
+            key: String? = null,
+        ): ColumnBuilder<T, V> = copy(checks = checks + CheckConstraint(check, name, key))
+
+        fun check(
+            check: (String) -> String,
+            name: String? = null,
+            key: String? = null,
+            getter: (T) -> V?,
+        ): Column<T, V> = check(check, name, key).map(getter)
+
+        fun unique(name: String? = null, key: String? = null): ColumnBuilder<T, V> =
+            copy(unique = UniqueConstraint(name, key))
+
+        fun <R> references(
+            target: Column<R, V>,
+            onDelete: ForeignKeyAction = ForeignKeyAction.RESTRICT,
+            onUpdate: ForeignKeyAction = ForeignKeyAction.RESTRICT,
+            constraintName: String? = null,
+            key: String? = null,
+        ): ColumnBuilder<T, V> = copy(
+            pendingForeignKey = PendingForeignKey(target, onDelete, onUpdate, constraintName, key)
+        )
+
+        fun <R> references(
+            target: Column<R, V>,
+            onDelete: ForeignKeyAction = ForeignKeyAction.RESTRICT,
+            onUpdate: ForeignKeyAction = ForeignKeyAction.RESTRICT,
+            constraintName: String? = null,
+            key: String? = null,
+            getter: (T) -> V?,
+        ): Column<T, V> = references(target, onDelete, onUpdate, constraintName, key).map(getter)
+
+        fun map(getter: (T) -> V?): Column<T, V> {
+            val col = owner.column(
+                name = name,
+                codec = codec,
+                isPrimaryKey = isPrimaryKey,
+                isGenerated = isGenerated,
+                isNullable = isNullable,
+                checks = checks,
+                unique = unique,
+                sensitive = sensitive,
+                sqlType = sqlType,
+                getter = getter,
+            )
+            pendingForeignKey?.let { fk ->
+                @Suppress("UNCHECKED_CAST")
+                val self = col as Column<E, V>
+                self.references(
+                    target = fk.target,
+                    onDelete = fk.onDelete,
+                    onUpdate = fk.onUpdate,
+                    constraintName = fk.constraintName,
+                    key = fk.key,
+                )
+            }
+            return col
+        }
+
+        operator fun invoke(getter: (T) -> V?): Column<T, V> = map(getter)
+
+        private fun copy(
+            isPrimaryKey: Boolean = this.isPrimaryKey,
+            isGenerated: Boolean = this.isGenerated,
+            isNullable: Boolean = this.isNullable,
+            checks: List<CheckConstraint> = this.checks,
+            unique: UniqueConstraint? = this.unique,
+            sensitive: Boolean = this.sensitive,
+            pendingForeignKey: PendingForeignKey<V>? = this.pendingForeignKey,
+        ): ColumnBuilder<T, V> = ColumnBuilder(
+            owner = owner,
+            name = name,
+            codec = codec,
+            sqlType = sqlType,
+            isPrimaryKey = isPrimaryKey,
+            isGenerated = isGenerated,
+            isNullable = isNullable,
+            checks = checks,
+            unique = unique,
+            sensitive = sensitive,
+            pendingForeignKey = pendingForeignKey,
+        )
+    }
+
+    protected data class PendingForeignKey<V>(
+        val target: Column<*, V>,
+        val onDelete: ForeignKeyAction,
+        val onUpdate: ForeignKeyAction,
+        val constraintName: String?,
+        val key: String?,
+    )
 
     /**
      * Build an entity from a result Row. Implementations should call
