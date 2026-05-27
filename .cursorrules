@@ -1,0 +1,30 @@
+# Aggo Project Rules & Context
+
+You are working on Aggo, a reflection-free, type-safe R2DBC DSL for PostgreSQL in Kotlin.
+
+## Core Mandates
+- **Zero Reflection**: Never use `KClass`, `::class.java`, or any runtime introspection in `schema/`, `query/`, `dsl/`, or `render/`. All mappings must be explicit.
+- **Workflow**: 
+  - Every feature/bugfix MUST have an Issue ID.
+  - Branch naming: `{feature|hotfix|ci}/{issue-id}`.
+  - Reference the Issue ID in commit messages.
+- **Package Boundaries**: 
+  - `schema/` -> `dsl/` -> `query/` (AST) -> `render/` -> `runtime/`.
+  - No backward dependencies. Renderers never touch the database.
+
+## Technical Standards
+- **Codecs**: Use `ValueClassCodec` for all `@JvmInline value class` types.
+- **SQL**: Use `ctx.bind(value, codec)` in renderers for all parameters. Never build `$1` manually.
+- **Testing**:
+  - Unit: `RendererTest` for SQL generation.
+  - Integration: `IntegrationTest` for real DB round-trips (requires Docker).
+
+## Reference Files
+- `CLAUDE.md`: Architecture map and core engineering standards.
+- `llms.txt`: Index of all project documentation and skills.
+- `.claude/skills/`: Detailed guides for specific components.
+
+## Common Tasks
+- Adding a Codec? See `.claude/skills/aggo-codec.md`
+- Adding a DSL operator? See `.claude/skills/aggo-predicate-operator.md`
+- Defining a Table? See `.claude/skills/aggo-schema-table.md`

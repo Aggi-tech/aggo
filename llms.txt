@@ -1,0 +1,26 @@
+# Aggo - Reflection-free R2DBC DSL
+
+Aggo is a type-safe, reflection-free R2DBC DSL for PostgreSQL, optimized for Kotlin and GraalVM native-image.
+
+## Core Documentation
+- [README.md](README.md): Overview and basic usage.
+- [CLAUDE.md](CLAUDE.md): Architecture map and core engineering standards.
+- [docs/](docs/): Full documentation suite.
+
+## Engineering Skills (Contextual Guidelines)
+The following skills define the architectural laws and workflows of the project:
+
+- [Architecture](.claude/skills/aggo-architecture.md): Zero-reflection law and package boundaries.
+- [Workflow](.claude/skills/aggo-workflow.md): Branch naming, issue tracking, and commit conventions.
+- [Codecs](.claude/skills/aggo-codec.md): How to implement and test data type bridges.
+- [SQL Dialects](.claude/skills/aggo-dialect.md): Implementing DML and DDL for different backends.
+- [Migrations](.claude/skills/aggo-migration.md): Schema versioning and DDL generation.
+- [Query DSL](.claude/skills/aggo-query-dsl.md): Writing type-safe Select, Insert, Update, and Delete queries.
+- [Predicates](.claude/skills/aggo-predicate-operator.md): Adding new WHERE operators and AST nodes.
+- [Schema & Tables](.claude/skills/aggo-schema-table.md): Defining metadata descriptors.
+
+## Technical Stack
+- Kotlin
+- R2DBC / PostgreSQL
+- GraalVM Native Image
+- Testcontainers
