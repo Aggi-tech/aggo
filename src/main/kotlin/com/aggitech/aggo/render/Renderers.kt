@@ -22,7 +22,7 @@ import com.aggitech.aggo.schema.Column
  */
 fun renderSelect(query: Select<*>, dialect: SqlDialect, limitOverride: Int? = null): RenderedSql {
     val ctx = RenderContext(dialect)
-    val table = dialect.quoteIdentifier(query.table.name)
+    val table = dialect.qualifyTableName(query.table.name)
 
     val columns = query.table.columns
         .joinToString(", ") { dialect.quoteIdentifier(it.name) }
@@ -42,7 +42,7 @@ fun renderSelect(query: Select<*>, dialect: SqlDialect, limitOverride: Int? = nu
         if (query.orderBy.isNotEmpty()) {
             append(" ORDER BY ")
             append(query.orderBy.joinToString(", ") { o ->
-                val col = "${dialect.quoteIdentifier(o.column.table.name)}.${dialect.quoteIdentifier(o.column.name)}"
+                val col = "${dialect.qualifyTableName(o.column.table.name)}.${dialect.quoteIdentifier(o.column.name)}"
                 "$col ${o.direction.name}"
             })
         }
@@ -54,8 +54,8 @@ fun renderSelect(query: Select<*>, dialect: SqlDialect, limitOverride: Int? = nu
 
 fun renderJoinSelect(query: JoinSelect<*, *>, dialect: SqlDialect): RenderedSql {
     val ctx = RenderContext(dialect)
-    val leftTable = dialect.quoteIdentifier(query.leftTable.name)
-    val rightTable = dialect.quoteIdentifier(query.rightTable.name)
+    val leftTable = dialect.qualifyTableName(query.leftTable.name)
+    val rightTable = dialect.qualifyTableName(query.rightTable.name)
     val columns = (query.leftTable.columns + query.rightTable.columns)
         .joinToString(", ") { renderQualifiedColumn(it, dialect) }
         .ifEmpty { "*" }
@@ -84,7 +84,7 @@ fun renderJoinSelect(query: JoinSelect<*, *>, dialect: SqlDialect): RenderedSql 
 
 fun renderInsert(query: Insert<*>, dialect: SqlDialect, returningPk: Boolean = false): RenderedInsert {
     val ctx = RenderContext(dialect)
-    val table = dialect.quoteIdentifier(query.table.name)
+    val table = dialect.qualifyTableName(query.table.name)
 
     val cols = query.assignments.joinToString(", ") { dialect.quoteIdentifier(it.column.name) }
     val placeholders = query.assignments.joinToString(", ") { bindAssignment(it, ctx) }
@@ -111,7 +111,7 @@ fun renderInsert(query: Insert<*>, dialect: SqlDialect, returningPk: Boolean = f
 
 fun renderUpdate(query: Update<*>, dialect: SqlDialect): RenderedSql {
     val ctx = RenderContext(dialect)
-    val table = dialect.quoteIdentifier(query.table.name)
+    val table = dialect.qualifyTableName(query.table.name)
 
     val setClause = query.assignments.joinToString(", ") { a ->
         "${dialect.quoteIdentifier(a.column.name)} = ${bindAssignment(a, ctx)}"
@@ -128,7 +128,7 @@ fun renderUpdate(query: Update<*>, dialect: SqlDialect): RenderedSql {
 
 fun renderDelete(query: Delete<*>, dialect: SqlDialect): RenderedSql {
     val ctx = RenderContext(dialect)
-    val table = dialect.quoteIdentifier(query.table.name)
+    val table = dialect.qualifyTableName(query.table.name)
 
     val sql = buildString(32 + table.length) {
         append("DELETE FROM ").append(table)
@@ -148,7 +148,7 @@ fun renderDelete(query: Delete<*>, dialect: SqlDialect): RenderedSql {
  */
 fun renderAggregateSelect(query: AggregateSelect<*>, dialect: SqlDialect): RenderedSql {
     val ctx = RenderContext(dialect)
-    val table = dialect.quoteIdentifier(query.table.name)
+    val table = dialect.qualifyTableName(query.table.name)
 
     val projections = query.projections.joinToString(", ") { ne ->
         "${PredicateRenderer.renderOperand(ne.expr.operand, ctx)} AS ${dialect.quoteIdentifier(ne.label)}"
@@ -165,7 +165,7 @@ fun renderAggregateSelect(query: AggregateSelect<*>, dialect: SqlDialect): Rende
         if (query.groupBy.isNotEmpty()) {
             append(" GROUP BY ")
             append(query.groupBy.joinToString(", ") { col ->
-                "${dialect.quoteIdentifier(col.table.name)}.${dialect.quoteIdentifier(col.name)}"
+                "${dialect.qualifyTableName(col.table.name)}.${dialect.quoteIdentifier(col.name)}"
             })
         }
 
@@ -199,7 +199,7 @@ fun renderProjectionSelect(
     limitOverride: Int? = null,
 ): RenderedSql {
     val ctx = RenderContext(dialect)
-    val table = dialect.quoteIdentifier(query.table.name)
+    val table = dialect.qualifyTableName(query.table.name)
     val effectiveLimit = limitOverride ?: query.limit
 
     val columns = query.columns.joinToString(", ") { dialect.quoteIdentifier(it.name) }
@@ -211,7 +211,7 @@ fun renderProjectionSelect(
         if (query.orderBy.isNotEmpty()) {
             append(" ORDER BY ")
             append(query.orderBy.joinToString(", ") { o ->
-                val col = "${dialect.quoteIdentifier(o.column.table.name)}.${dialect.quoteIdentifier(o.column.name)}"
+                val col = "${dialect.qualifyTableName(o.column.table.name)}.${dialect.quoteIdentifier(o.column.name)}"
                 "$col ${o.direction.name}"
             })
         }
@@ -229,7 +229,7 @@ private fun <V> bindAssignment(a: Assignment<*, V>, ctx: RenderContext): String 
     ctx.bind(a.value, a.codec, a.column)
 
 private fun renderQualifiedColumn(column: Column<*, *>, dialect: SqlDialect): String =
-    "${dialect.quoteIdentifier(column.table.name)}.${dialect.quoteIdentifier(column.name)}"
+    "${dialect.qualifyTableName(column.table.name)}.${dialect.quoteIdentifier(column.name)}"
 
 private fun StringBuilder.appendPagination(dialect: SqlDialect, limit: Int?, offset: Int?) {
     val pagination = dialect.renderPagination(limit, offset)

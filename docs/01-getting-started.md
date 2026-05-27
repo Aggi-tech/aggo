@@ -126,3 +126,15 @@ No `reflect-config.json` is needed — Aggo contains no reflection.
 - [Writing Data](04-writes.md) — INSERT, UPDATE, DELETE, transactions
 - [JOIN Queries](05-joins.md) — LEFT JOIN with typed result pairs
 - [Migration Generation](06-migrations.md) — generate and apply versioned DDL from your schema
+- [Multitenancy](07-multitenancy.md) — schema-per-tenant and database-per-tenant decorators
+
+## API reference
+
+Generate the Dokka HTML API reference locally:
+
+```bash
+mvn -q -DskipTests dokka:dokka
+```
+
+The generated site is written to `target/dokka`. The GitHub Pages workflow uses
+the same command and publishes that directory.

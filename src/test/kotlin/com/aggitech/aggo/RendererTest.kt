@@ -3,6 +3,7 @@ package com.aggitech.aggo
 import com.aggitech.aggo.dialect.MySqlDialect
 import com.aggitech.aggo.dialect.OracleDialect
 import com.aggitech.aggo.dialect.PostgresDialect
+import com.aggitech.aggo.dialect.forSchema
 import com.aggitech.aggo.dsl.aggregate
 import com.aggitech.aggo.dsl.and
 import com.aggitech.aggo.dsl.avg
@@ -37,10 +38,13 @@ import com.aggitech.aggo.dsl.times
 import com.aggitech.aggo.dsl.update
 import com.aggitech.aggo.dsl.upper
 import com.aggitech.aggo.dsl.where
+import com.aggitech.aggo.migration.migrationPlan
+import com.aggitech.aggo.migration.migrationSchema
 import com.aggitech.aggo.render.renderAggregateSelect
 import com.aggitech.aggo.render.renderDelete
 import com.aggitech.aggo.render.renderInsert
 import com.aggitech.aggo.render.renderJoinSelect
+import com.aggitech.aggo.render.renderProjectionSelect
 import com.aggitech.aggo.render.renderSelect
 import com.aggitech.aggo.render.renderUpdate
 import io.kotest.core.spec.style.StringSpec
@@ -86,6 +90,93 @@ class RendererTest : StringSpec({
             """WHERE "people"."active" = ${'$'}1 """ +
             """ORDER BY "people"."created_at" DESC, "people"."name" ASC """ +
             """LIMIT 10 OFFSET 20"""
+    }
+
+    "schema-qualified dialect renders table references across select forms" {
+        val dialect = PostgresDialect.forSchema("acme")
+        val select = renderSelect(
+            select(People) {
+                where { People.active eq true }
+                orderBy { People.createdAt.desc() }
+            },
+            dialect,
+        )
+        select.sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "acme"."people" """ +
+            """WHERE "acme"."people"."active" = ${'$'}1 """ +
+            """ORDER BY "acme"."people"."created_at" DESC"""
+
+        val projection = renderProjectionSelect(
+            com.aggitech.aggo.dsl.selectProjection(People, People.id, People.email) {
+                where { People.email.isNotNull() }
+            },
+            dialect,
+        )
+        projection.sql shouldBe
+            """SELECT "id", "email" FROM "acme"."people" WHERE "acme"."people"."email" IS NOT NULL"""
+
+        val aggregate = renderAggregateSelect(
+            aggregate(People) {
+                project(count(People.id) `as` "cnt")
+                groupBy(People.active)
+            },
+            dialect,
+        )
+        aggregate.sql shouldBe
+            """SELECT COUNT("acme"."people"."id") AS "cnt" FROM "acme"."people" """ +
+            """GROUP BY "acme"."people"."active""""
+    }
+
+    "schema-qualified dialect renders joins and mutations" {
+        val dialect = PostgresDialect.forSchema("acme")
+        val joined = renderJoinSelect(People.leftJoin(Pets) { People.id eq Pets.ownerId }, dialect)
+        joined.sql shouldBe
+            """SELECT "acme"."people"."id", "acme"."people"."email", "acme"."people"."name", """ +
+            """"acme"."people"."active", "acme"."people"."created_at", "acme"."pets"."id", """ +
+            """"acme"."pets"."owner_id", "acme"."pets"."name" FROM "acme"."people" """ +
+            """LEFT JOIN "acme"."pets" ON "acme"."people"."id" = "acme"."pets"."owner_id""""
+
+        renderInsert(insert(People) { People.email setTo Email("a@b.com") }, dialect).sql shouldBe
+            """INSERT INTO "acme"."people" ("email") VALUES (${'$'}1)"""
+        renderUpdate(
+            update(People) {
+                People.active setTo false
+                where { People.id eq 1 }
+            },
+            dialect,
+        ).sql shouldBe
+            """UPDATE "acme"."people" SET "active" = ${'$'}1 WHERE "acme"."people"."id" = ${'$'}2"""
+        renderDelete(delete(People) { where { People.id eq 1 } }, dialect).sql shouldBe
+            """DELETE FROM "acme"."people" WHERE "acme"."people"."id" = ${'$'}1"""
+    }
+
+    "schema-qualified migration dialect renders DDL table references" {
+        val dialect = PostgresDialect.forSchema("acme")
+        val plan = migrationPlan(
+            migrationSchema("spec_9_schema", listOf(People, Pets), dialect),
+            dialect,
+        )
+
+        plan.steps.mapNotNull { it.sql } shouldBe listOf(
+            """
+            CREATE TABLE "acme"."people" (
+                "id" INTEGER NOT NULL,
+                "email" TEXT NOT NULL,
+                "name" TEXT NOT NULL,
+                "active" BOOLEAN NOT NULL,
+                "created_at" TIMESTAMPTZ NOT NULL,
+                PRIMARY KEY ("id")
+            );
+            """.trimIndent(),
+            """
+            CREATE TABLE "acme"."pets" (
+                "id" INTEGER NOT NULL,
+                "owner_id" INTEGER NOT NULL,
+                "name" TEXT NOT NULL,
+                PRIMARY KEY ("id")
+            );
+            """.trimIndent(),
+        )
     }
 
     "select renders MySQL placeholders quotes and pagination" {

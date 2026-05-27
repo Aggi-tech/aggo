@@ -75,6 +75,7 @@
         <maven.jar.version>3.5.0</maven.jar.version>
         <maven.gpg.version>3.2.7</maven.gpg.version>
         <central.publishing.version>0.10.0</central.publishing.version>
+        <dokka.version>2.2.0</dokka.version>
     </properties>
 
     <dependencyManagement>
@@ -248,6 +249,29 @@
                     <systemPropertyVariables>
                         <kotest.framework.classpath.scanning.autoscan.disable>true</kotest.framework.classpath.scanning.autoscan.disable>
                     </systemPropertyVariables>
+                </configuration>
+            </plugin>
+
+            <!-- Generates Kotlin API reference HTML from KDoc for GitHub Pages. -->
+            <plugin>
+                <groupId>org.jetbrains.dokka</groupId>
+                <artifactId>dokka-maven-plugin</artifactId>
+                <version>${dokka.version}</version>
+                <configuration>
+                    <moduleName>${project.name}</moduleName>
+                    <outputDir>${project.build.directory}/dokka</outputDir>
+                    <sourceDirectories>
+                        <dir>${project.basedir}/src/main/kotlin</dir>
+                    </sourceDirectories>
+                    <includes>
+                        <include>${project.basedir}/docs/dokka-module.md</include>
+                    </includes>
+                    <documentedVisibilities>
+                        <visibility>PUBLIC</visibility>
+                        <visibility>PROTECTED</visibility>
+                    </documentedVisibilities>
+                    <jdkVersion>21</jdkVersion>
+                    <skipEmptyPackages>true</skipEmptyPackages>
                 </configuration>
             </plugin>
 

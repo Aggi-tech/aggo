@@ -473,7 +473,9 @@ class Session internal constructor(
 
         ensureVersionTable()
 
-        if (queryLong("SELECT COUNT(*) FROM \"aggo_schema_versions\" WHERE \"version\" = ${sqlLiteral(plan.toVersion)}") > 0L) {
+        val versionTable = dialect.qualifyTableName(VERSION_TABLE)
+
+        if (queryLong("SELECT COUNT(*) FROM $versionTable WHERE \"version\" = ${sqlLiteral(plan.toVersion)}") > 0L) {
             return MigrationResult(
                 fromVersion = plan.fromVersion,
                 toVersion = plan.toVersion,
@@ -483,7 +485,7 @@ class Session internal constructor(
         }
 
         plan.fromVersion?.let { from ->
-            require(queryLong("SELECT COUNT(*) FROM \"aggo_schema_versions\" WHERE \"version\" = ${sqlLiteral(from)}") > 0L) {
+            require(queryLong("SELECT COUNT(*) FROM $versionTable WHERE \"version\" = ${sqlLiteral(from)}") > 0L) {
                 "migration ${plan.toVersion} requires '$from' to be applied first"
             }
         }
@@ -496,7 +498,7 @@ class Session internal constructor(
         }
 
         executeMigrationSql(
-            "INSERT INTO \"aggo_schema_versions\" (\"version\", \"previous_version\", \"description\", \"checksum\") " +
+            "INSERT INTO $versionTable (\"version\", \"previous_version\", \"description\", \"checksum\") " +
                 "VALUES (${sqlLiteral(plan.toVersion)}, ${sqlNullableLiteral(plan.fromVersion)}, " +
                 "${sqlLiteral(plan.steps.joinToString("; ") { it.change })}, " +
                 "${sqlNullableLiteral(plan.checksum)});",
@@ -519,9 +521,10 @@ class Session internal constructor(
      */
     suspend fun applyMigrations(entries: List<MigrationFileEntry>): List<MigrationResult> {
         ensureVersionTable()
+        val versionTable = dialect.qualifyTableName(VERSION_TABLE)
         val results = mutableListOf<MigrationResult>()
         for (entry in entries) {
-            if (queryLong("SELECT COUNT(*) FROM \"aggo_schema_versions\" WHERE \"version\" = ${sqlLiteral(entry.version)}") > 0L) {
+            if (queryLong("SELECT COUNT(*) FROM $versionTable WHERE \"version\" = ${sqlLiteral(entry.version)}") > 0L) {
                 results += MigrationResult(
                     fromVersion = entry.fromVersion,
                     toVersion = entry.version,
@@ -537,7 +540,7 @@ class Session internal constructor(
             }
 
             entry.fromVersion?.let { from ->
-                require(queryLong("SELECT COUNT(*) FROM \"aggo_schema_versions\" WHERE \"version\" = ${sqlLiteral(from)}") > 0L) {
+                require(queryLong("SELECT COUNT(*) FROM $versionTable WHERE \"version\" = ${sqlLiteral(from)}") > 0L) {
                     "migration ${entry.version} requires '$from' to be applied first"
                 }
             }
@@ -545,7 +548,7 @@ class Session internal constructor(
             executeMigrationSql(entry.sql)
 
             executeMigrationSql(
-                "INSERT INTO \"aggo_schema_versions\" (\"version\", \"previous_version\", \"description\", \"checksum\") " +
+                "INSERT INTO $versionTable (\"version\", \"previous_version\", \"description\", \"checksum\") " +
                     "VALUES (${sqlLiteral(entry.version)}, ${sqlNullableLiteral(entry.fromVersion)}, " +
                     "${sqlLiteral("file-based migration")}, ${sqlLiteral(entry.checksum)});",
             )
@@ -586,9 +589,10 @@ class Session internal constructor(
     }
 
     private suspend fun ensureVersionTable() {
+        val versionTable = dialect.qualifyTableName(VERSION_TABLE)
         executeMigrationSql(
             """
-            CREATE TABLE IF NOT EXISTS "aggo_schema_versions" (
+            CREATE TABLE IF NOT EXISTS $versionTable (
                 "version" TEXT PRIMARY KEY,
                 "previous_version" TEXT,
                 "description" TEXT NOT NULL,
@@ -598,7 +602,7 @@ class Session internal constructor(
             """.trimIndent(),
         )
         executeMigrationSql(
-            "ALTER TABLE \"aggo_schema_versions\" ADD COLUMN IF NOT EXISTS \"checksum\" TEXT;",
+            "ALTER TABLE $versionTable ADD COLUMN IF NOT EXISTS \"checksum\" TEXT;",
         )
     }
 
@@ -687,6 +691,8 @@ private fun sqlNullableLiteral(value: String?): String =
 
 private fun sqlLiteral(value: String): String =
     "'" + value.replace("'", "''") + "'"
+
+private const val VERSION_TABLE = "aggo_schema_versions"
 
 /**
  * Bridge `Publisher<? extends Result>` (which Kotlin sees as `Publisher<out Result>`)

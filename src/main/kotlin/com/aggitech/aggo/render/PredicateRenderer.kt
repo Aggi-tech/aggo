@@ -80,7 +80,7 @@ internal object PredicateRenderer {
     fun renderOperand(operand: Operand, ctx: RenderContext, column: com.aggitech.aggo.schema.Column<*, *>? = null): String = when (operand) {
         is Operand.Col<*, *> -> {
             val col = operand.column
-            "${ctx.dialect.quoteIdentifier(col.table.name)}.${ctx.dialect.quoteIdentifier(col.name)}"
+            "${ctx.dialect.qualifyTableName(col.table.name)}.${ctx.dialect.quoteIdentifier(col.name)}"
         }
         is Operand.Literal<*> -> {
             // Cast is safe: Operand.Literal pairs value with the matching codec.

@@ -2,6 +2,9 @@
 
 Reflection-free Kotlin DSL on top of R2DBC + Postgres. Standalone Maven project; not part of any aggregator. Published to GitHub Packages and consumed by `payment-ms` / `person-ms` as a regular Maven dependency.
 
+API reference generated from KDoc with Dokka is published to GitHub Pages:
+https://aggi-tech.github.io/aggo/
+
 ## Why it exists
 
 This is a fork-style refactor of [AggORM](https://github.com/yurimoinhos/AggORM) that:

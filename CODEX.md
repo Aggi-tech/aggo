@@ -23,8 +23,10 @@ Aggo is a reflection-free, type-safe R2DBC DSL for PostgreSQL in Kotlin, optimiz
 - `llms.txt`: Full index of technical skills and docs.
 - `CLAUDE.md`: Architecture map and engineering standards.
 - `.claude/skills/`: Detailed component guides.
+- `.codex/skills/`: Codex skill copies generated from `.claude/skills/`.
 
 ## Tooling
-- Build: `./gradlew compileKotlin`
-- Test: `./gradlew test` (Integration tests require Docker/Testcontainers)
-- Migrations: `./gradlew aggoMigrate`
+- Build: `mvn -q compile`
+- Test: `mvn -q test` (Integration tests require Docker/Testcontainers)
+- Migrations: `mvn -q test -Dtest=AggoMigrateTest` for migration generation coverage
+- API docs: `mvn -q -DskipTests dokka:dokka` generates Dokka HTML in `target/dokka`

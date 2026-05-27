@@ -46,7 +46,7 @@ object MySqlDialect : MigrationDialect {
         val columns = primaryKeyColumns.joinToString(", ") { quoteIdentifier(it.name) }
         val where = primaryKeyColumns.joinToString(" AND ") { "${quoteIdentifier(it.name)} = ?" }
         return InsertReturnStrategy.PostInsertSelect(
-            "SELECT $columns FROM ${quoteIdentifier(firstPk.table.name)} WHERE $where",
+            "SELECT $columns FROM ${qualifyTableName(firstPk.table.name)} WHERE $where",
         )
     }
 

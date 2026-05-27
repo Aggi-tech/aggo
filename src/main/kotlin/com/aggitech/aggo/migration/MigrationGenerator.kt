@@ -319,7 +319,7 @@ fun Table<*>.createTableSql(dialect: MigrationDialect, ifNotExists: Boolean = fa
 /** Returns a `CREATE TABLE` DDL statement for an Aggo-independent table snapshot. */
 fun MigrationTable.createTableSql(dialect: MigrationDialect, ifNotExists: Boolean = false): String {
     val qualifier = if (ifNotExists) "IF NOT EXISTS " else ""
-    val tableName = dialect.quoteIdentifier(name)
+    val tableName = dialect.qualifyTableName(name)
 
     val lines = mutableListOf<String>()
 
@@ -367,7 +367,7 @@ fun Table<*>.addCheckConstraintsSql(dialect: MigrationDialect): List<String> =
 /** Returns `ALTER TABLE … ADD CONSTRAINT … CHECK …` statements for a table snapshot. */
 fun MigrationTable.addCheckConstraintsSql(dialect: MigrationDialect): List<String> =
     checks.map { check ->
-        "ALTER TABLE ${dialect.quoteIdentifier(name)} ADD CONSTRAINT " +
+        "ALTER TABLE ${dialect.qualifyTableName(name)} ADD CONSTRAINT " +
             "${dialect.quoteIdentifier(check.name)} CHECK (${check.expression});"
     }
 
@@ -412,13 +412,13 @@ fun MigrationTable.addUniqueConstraintsSql(dialect: MigrationDialect): List<Stri
  */
 fun Table<*>.dropTableSql(dialect: SqlDialect, ifExists: Boolean = false): String {
     val qualifier = if (ifExists) "IF EXISTS " else ""
-    return "DROP TABLE ${qualifier}${dialect.quoteIdentifier(name)};"
+    return "DROP TABLE ${qualifier}${dialect.qualifyTableName(name)};"
 }
 
 /** Returns a `DROP TABLE` statement for an Aggo-independent table snapshot. */
 fun MigrationTable.dropTableSql(dialect: SqlDialect, ifExists: Boolean = false): String {
     val qualifier = if (ifExists) "IF EXISTS " else ""
-    return "DROP TABLE ${qualifier}${dialect.quoteIdentifier(name)};"
+    return "DROP TABLE ${qualifier}${dialect.qualifyTableName(name)};"
 }
 
 private fun diffSchemas(
@@ -471,7 +471,7 @@ private fun diffTable(
                 steps += if (column.nullable) {
                     MigrationStep(
                         change = "add column ${current.name}.${column.name}",
-                        sql = "ALTER TABLE ${dialect.quoteIdentifier(current.name)} ADD COLUMN " +
+                        sql = "ALTER TABLE ${dialect.qualifyTableName(current.name)} ADD COLUMN " +
                             "${dialect.quoteIdentifier(column.name)} ${column.sqlType};",
                     )
                 } else {
@@ -512,7 +512,7 @@ private fun diffTable(
         when {
             oldCheck == null -> steps += MigrationStep(
                 change = "add check ${current.name}.${check.name}",
-                sql = "ALTER TABLE ${dialect.quoteIdentifier(current.name)} ADD CONSTRAINT " +
+                sql = "ALTER TABLE ${dialect.qualifyTableName(current.name)} ADD CONSTRAINT " +
                     "${dialect.quoteIdentifier(check.name)} CHECK (${check.expression});",
             )
             oldCheck.expression != check.expression -> steps += MigrationStep(
@@ -614,25 +614,25 @@ private fun diffTable(
 }
 
 private fun dropNotNullSql(tableName: String, column: MigrationColumn, dialect: MigrationDialect): String =
-    "ALTER TABLE ${dialect.quoteIdentifier(tableName)} ALTER COLUMN " +
+    "ALTER TABLE ${dialect.qualifyTableName(tableName)} ALTER COLUMN " +
         "${dialect.quoteIdentifier(column.name)} DROP NOT NULL;"
 
 internal fun buildFkAlterTable(tableName: String, fk: MigrationForeignKey, dialect: SqlDialect): String =
-    "ALTER TABLE ${dialect.quoteIdentifier(tableName)} ADD CONSTRAINT ${dialect.quoteIdentifier(fk.name)} " +
+    "ALTER TABLE ${dialect.qualifyTableName(tableName)} ADD CONSTRAINT ${dialect.quoteIdentifier(fk.name)} " +
         "FOREIGN KEY (${dialect.quoteIdentifier(fk.column)}) " +
-        "REFERENCES ${dialect.quoteIdentifier(fk.referencedTable)} (${dialect.quoteIdentifier(fk.referencedColumn)}) " +
+        "REFERENCES ${dialect.qualifyTableName(fk.referencedTable)} (${dialect.quoteIdentifier(fk.referencedColumn)}) " +
         "ON DELETE ${fk.onDelete} ON UPDATE ${fk.onUpdate};"
 
 internal fun buildUniqueAlterTable(tableName: String, unique: MigrationUnique, dialect: SqlDialect): String {
     val cols = unique.columns.joinToString(", ") { dialect.quoteIdentifier(it) }
-    return "ALTER TABLE ${dialect.quoteIdentifier(tableName)} ADD CONSTRAINT ${dialect.quoteIdentifier(unique.name)} " +
+    return "ALTER TABLE ${dialect.qualifyTableName(tableName)} ADD CONSTRAINT ${dialect.quoteIdentifier(unique.name)} " +
         "UNIQUE ($cols);"
 }
 
 internal fun buildIndexSql(tableName: String, index: MigrationIndex, dialect: SqlDialect): String {
     val cols = index.columns.joinToString(", ") { dialect.quoteIdentifier(it) }
     return "CREATE INDEX ${dialect.quoteIdentifier(index.name)} " +
-        "ON ${dialect.quoteIdentifier(tableName)} USING ${index.method} ($cols);"
+        "ON ${dialect.qualifyTableName(tableName)} USING ${index.method} ($cols);"
 }
 
 /** Returns `CREATE INDEX` statements for all declared indexes on an Aggo table. */

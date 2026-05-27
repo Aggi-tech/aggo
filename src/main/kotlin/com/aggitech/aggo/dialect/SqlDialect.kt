@@ -14,6 +14,14 @@ interface SqlDialect {
     /** Quote (and validate) an identifier so it is safe to interpolate. */
     fun quoteIdentifier(name: String): String
 
+    /**
+     * Returns the fully-qualified table reference used in FROM / JOIN / UPDATE /
+     * INSERT INTO / DELETE FROM clauses.
+     *
+     * Default: bare quoted identifier.
+     */
+    fun qualifyTableName(tableName: String): String = quoteIdentifier(tableName)
+
     /** Render dialect-specific LIMIT/OFFSET syntax. Empty string means no clause. */
     fun renderPagination(limit: Int?, offset: Int?): String
 
