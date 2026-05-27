@@ -1,4 +1,8 @@
+# Package com.aggitech.aggo.runtime.multitenancy
+
 # Multitenancy
+
+Languages: English first, Portuguese below.
 
 Aggo supports two tenant-isolation models without adding tenant parameters to
 repository methods:
@@ -23,6 +27,10 @@ withContext(TenantContext("acme")) {
 
 No runtime reflection is used. Tenant selection happens at the runtime/dialect
 boundary.
+
+Hibernate usually handles multitenancy through provider-level connection or
+schema resolvers. Aggo keeps the same idea explicit: tenant resolution happens
+before the query reaches the dialect/runtime boundary.
 
 ## TenantContext
 
@@ -627,6 +635,107 @@ fun stop() {
     aggo.close()
 }
 ```
+
+## Aggo vs Hibernate multitenancy
+
+| Hibernate | Aggo |
+|-----------|------|
+| `CurrentTenantIdentifierResolver` | `TenantContext` / `TenantResolver` |
+| Multi-tenant connection provider | `MultiDatabaseAggo` tenant pool cache |
+| Schema strategy | `MultiSchemaAggo` dialect decoration |
+| Entity manager still manages entities | Aggo still executes explicit queries |
+| Provider-level magic | Tenant boundary is visible in runtime setup |
+
+Aggo does not add tenant columns automatically and does not rewrite entity
+graphs. Use it when your service already knows the tenant at request/job
+boundary and wants every repository method to stay tenant-agnostic.
+
+## Multitenancy PT
+
+Aggo suporta dois modelos de isolamento por tenant:
+
+| Modelo | Isolamento | Pool | Entrada |
+|--------|------------|------|---------|
+| Schema por tenant | Um schema PostgreSQL por tenant | Um pool compartilhado | `MultiSchemaAggo` |
+| Banco por tenant | Um banco separado por tenant | Um pool por tenant ativo | `MultiDatabaseAggo` |
+
+O tenant normalmente vem do contexto da coroutine:
+
+```kotlin
+withContext(TenantContext("acme")) {
+    aggo.read {
+        fetchAll(UsersTable)
+    }
+}
+```
+
+### Schema por tenant
+
+`MultiSchemaAggo` usa um pool compartilhado e qualifica as tabelas com o schema
+do tenant. Uma query para `UsersTable` vira algo como:
+
+```sql
+SELECT "id", "email" FROM "acme"."users"
+```
+
+Uso:
+
+```kotlin
+val aggo = MultiSchemaAggo(basePool)
+
+withContext(TenantContext("acme")) {
+    val users = aggo.fetchAll(UsersTable) {
+        where { UsersTable.active eq true }
+    }
+}
+```
+
+Esse modelo e bom quando os tenants compartilham o mesmo servidor e voce quer
+custos menores de conexao.
+
+### Banco por tenant
+
+`MultiDatabaseAggo` cria ou reutiliza um pool para cada tenant ativo:
+
+```kotlin
+val aggo = MultiDatabaseAggo(
+    tenantResolver = resolver,
+    poolFactory = { tenant ->
+        AggoPool.postgres(configFor(tenant))
+    },
+)
+```
+
+Uso:
+
+```kotlin
+withContext(TenantContext("acme")) {
+    aggo.tx {
+        insert(UsersTable, user)
+    }
+}
+```
+
+Esse modelo e mais isolado, mas custa mais recursos porque cada tenant pode ter
+pool proprio.
+
+### Migracoes por tenant
+
+```kotlin
+aggo.applyMigrationToAll(
+    plan = plan,
+    tenantIds = listOf("acme", "globex"),
+)
+```
+
+Falhas sao retornadas por tenant, permitindo retry seletivo.
+
+### Comparacao com Hibernate
+
+Hibernate oferece estrategias de multitenancy integradas ao ORM. Aggo resolve
+tenant antes da execucao da query. Isso combina com a filosofia da biblioteca:
+sem entity manager, sem proxies e sem SQL escondido. A aplicacao define o
+tenant no boundary da requisicao e as queries continuam iguais.
 
 ### `TenantPoolCache`
 

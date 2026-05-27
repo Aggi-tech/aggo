@@ -41,6 +41,7 @@ import com.aggitech.aggo.dsl.where
 import com.aggitech.aggo.migration.migrationPlan
 import com.aggitech.aggo.migration.migrationSchema
 import com.aggitech.aggo.render.renderAggregateSelect
+import com.aggitech.aggo.render.renderCountSelect
 import com.aggitech.aggo.render.renderDelete
 import com.aggitech.aggo.render.renderInsert
 import com.aggitech.aggo.render.renderJoinSelect
@@ -90,6 +91,19 @@ class RendererTest : StringSpec({
             """WHERE "people"."active" = ${'$'}1 """ +
             """ORDER BY "people"."created_at" DESC, "people"."name" ASC """ +
             """LIMIT 10 OFFSET 20"""
+    }
+
+    "count select reuses filter and ignores order limit offset" {
+        val q = select(People) {
+            where { People.active eq true }
+            orderBy { People.createdAt.desc() }
+            limit(10)
+            offset(20)
+        }
+        val r = renderCountSelect(q, PostgresDialect)
+        r.sql shouldBe """SELECT COUNT(*) FROM "people" WHERE "people"."active" = ${'$'}1"""
+        r.params shouldHaveSize 1
+        r.params[0].value shouldBe true
     }
 
     "schema-qualified dialect renders table references across select forms" {

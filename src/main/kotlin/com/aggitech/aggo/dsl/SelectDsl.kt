@@ -65,9 +65,15 @@ class SelectBuilder<E> internal constructor(val table: Table<E>) {
     }
 
     /** Maximum number of rows to return. Passed as `LIMIT n` to the database. */
+    @Deprecated(
+        message = "Use Session.paginate(..., page, size) for application pagination. Keep limit only for low-level query descriptors.",
+    )
     fun limit(n: Int) { limit = n }
 
     /** Number of rows to skip before returning results. Passed as `OFFSET n`. */
+    @Deprecated(
+        message = "Use Session.paginate(..., page, size) for application pagination. Keep offset only for low-level query descriptors.",
+    )
     fun offset(n: Int) { offset = n }
 
     internal fun build(): Select<E> = Select(table, where, orderBy.toList(), limit, offset)
@@ -133,7 +139,14 @@ class ProjectionSelectBuilder<E> internal constructor(
 
     fun where(block: WhereScope.() -> Predicate) { where = WhereScope.block() }
     fun orderBy(block: OrderByScope<E>.() -> Unit) { OrderByScope(orderBy).block() }
+    @Deprecated(
+        message = "Use Session.paginate(..., page, size) for application pagination. Keep limit only for low-level query descriptors.",
+    )
     fun limit(n: Int) { limit = n }
+
+    @Deprecated(
+        message = "Use Session.paginate(..., page, size) for application pagination. Keep offset only for low-level query descriptors.",
+    )
     fun offset(n: Int) { offset = n }
 
     internal fun build(): ProjectionSelect<E> =

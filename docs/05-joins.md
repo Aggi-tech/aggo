@@ -1,8 +1,15 @@
+# Package com.aggitech.aggo.query
+
 # JOIN Queries
+
+Languages: English first, Portuguese below.
 
 Aggo supports LEFT JOIN between two tables. The result is a typed `JoinedRow<L, R>`
 pair where the right side is `null` when no matching row exists in the right table
 (standard LEFT JOIN semantics).
+
+This is the explicit Aggo replacement for Hibernate association loading. Aggo
+does not create relation proxies and does not lazy-load collections.
 
 ## leftJoin
 
@@ -118,3 +125,80 @@ val base = OrdersTable
 val pending = base.where { OrdersTable.status eq "PENDING" }.limit(50)
 val completed = base.where { OrdersTable.status eq "COMPLETED" }.limit(100)
 ```
+
+## Aggo vs Hibernate associations
+
+| Hibernate | Aggo |
+|-----------|------|
+| `@ManyToOne(fetch = LAZY)` | `leftJoin(...)` when the relation is needed |
+| Proxy initialization | Nullable right side in `JoinedRow<L, R>` |
+| Hidden N+1 risk | Query shape is explicit |
+| Entity graph/fetch join | Explicit join DSL |
+| Cascaded object graph | Separate table descriptors and queries |
+
+Aggo's join API is intentionally small: it currently models typed LEFT JOINs
+between two tables. For more complex reports, use projections, aggregates, or
+database views with explicit table descriptors.
+
+## Consultas JOIN
+
+Aggo suporta `LEFT JOIN` entre duas tabelas. O resultado e um
+`JoinedRow<L, R>`: o lado esquerdo sempre existe e o lado direito e nullable
+quando nao ha correspondencia.
+
+```kotlin
+val rows: List<JoinedRow<Order, User?>> = aggo.read {
+    fetchAllJoined(
+        OrdersTable.leftJoin(UsersTable) {
+            OrdersTable.userId eq UsersTable.id
+        }
+    )
+}
+
+for ((order, user) in rows) {
+    println("${order.id}: ${user?.name ?: "sem usuario"}")
+}
+```
+
+### Filtros e ordenacao
+
+```kotlin
+val rows = aggo.read {
+    fetchAllJoined(
+        OrdersTable
+            .leftJoin(UsersTable) { OrdersTable.userId eq UsersTable.id }
+            .where { OrdersTable.status eq "PENDING" }
+            .orderBy {
+                OrdersTable.createdAt.desc()
+                UsersTable.name.asc()
+            }
+    )
+}
+```
+
+### Streaming
+
+```kotlin
+aggo.read {
+    streamJoined(
+        OrdersTable.leftJoin(UsersTable) {
+            OrdersTable.userId eq UsersTable.id
+        }
+    ).collect { (order, user) ->
+        export(order, user)
+    }
+}
+```
+
+### Como o null do lado direito e detectado
+
+Aggo verifica as chaves primarias da tabela direita. Se todas vierem `null`, o
+`right` do `JoinedRow` fica `null`. Declare sempre `isPrimaryKey = true` na
+tabela direita para evitar ambiguidades.
+
+### Comparacao com Hibernate
+
+No Hibernate, associacoes podem ser carregadas por lazy loading, fetch join ou
+entity graph. Em Aggo, voce escolhe o join explicitamente. Isso deixa a query
+mais verbosa que navegar `order.user`, mas evita SQL escondido e problemas de
+proxy fora da sessao.

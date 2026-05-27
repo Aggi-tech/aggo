@@ -285,9 +285,53 @@ class Aggo(private val pool: AggoPool) : AutoCloseable {
     suspend fun <E> fetchAll(query: Select<E>): List<E> =
         read { fetchAll(query) }
 
+    /** Typed-result equivalent to `aggo.read { fetchAll(query) }`. */
+    suspend fun <E> fetchAll(query: Select<E>, errorMap: ConstraintErrorMap): Query<List<E>, AggoError> =
+        readQuery(errorMap) { fetchAll(query) }
+
     /** Equivalent to `aggo.read { fetchAll(table) { … } }`. */
     suspend fun <E> fetchAll(table: Table<E>, block: SelectBuilder<E>.() -> Unit = {}): List<E> =
         read { fetchAll(table, block) }
+
+    /** Typed-result equivalent to `aggo.read { fetchAll(table) { … } }`. */
+    suspend fun <E> fetchAll(
+        table: Table<E>,
+        errorMap: ConstraintErrorMap,
+        block: SelectBuilder<E>.() -> Unit = {},
+    ): Query<List<E>, AggoError> =
+        readQuery(errorMap) { fetchAll(table, block) }
+
+    /** Equivalent to `aggo.read { paginate(query, page, size) }`. */
+    suspend fun <E> paginate(query: Select<E>, page: Int, size: Int): Triple<List<E>, Long, Int> =
+        read { paginate(query, page, size) }
+
+    /** Typed-result equivalent to `aggo.read { paginate(query, page, size) }`. */
+    suspend fun <E> paginate(
+        query: Select<E>,
+        page: Int,
+        size: Int,
+        errorMap: ConstraintErrorMap,
+    ): Query<Triple<List<E>, Long, Int>, AggoError> =
+        readQuery(errorMap) { paginate(query, page, size) }
+
+    /** Equivalent to `aggo.read { paginate(table, page, size) { … } }`. */
+    suspend fun <E> paginate(
+        table: Table<E>,
+        page: Int,
+        size: Int,
+        block: SelectBuilder<E>.() -> Unit = {},
+    ): Triple<List<E>, Long, Int> =
+        read { paginate(table, page, size, block) }
+
+    /** Typed-result equivalent to `aggo.read { paginate(table, page, size) { … } }`. */
+    suspend fun <E> paginate(
+        table: Table<E>,
+        page: Int,
+        size: Int,
+        errorMap: ConstraintErrorMap,
+        block: SelectBuilder<E>.() -> Unit = {},
+    ): Query<Triple<List<E>, Long, Int>, AggoError> =
+        readQuery(errorMap) { paginate(table, page, size, block) }
 
     /** Equivalent to `aggo.read { fetchOne(query) }`. Returns null when no row matches. */
     suspend fun <E> fetchOne(query: Select<E>): E? =

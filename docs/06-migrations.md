@@ -1,4 +1,8 @@
+# Package com.aggitech.aggo.migration
+
 # Migration Generation and Execution
+
+Languages: English first, Portuguese below.
 
 Aggo can generate and apply database migrations from your `Table` descriptors.
 The generated plan is detached from the runtime: Aggo reads `Table`/`Codec`
@@ -8,6 +12,10 @@ from that snapshot.
 Liquibase is no longer part of the workflow. You may still export `plan.sql()`
 to any external migration tool, but Aggo can execute the same plan itself and
 record the applied version in `aggo_schema_versions`.
+
+Compared with Hibernate `hbm2ddl`, Aggo migrations are intended to be reviewed,
+versioned, and applied deliberately. Do not use automatic schema mutation at
+application startup for production.
 
 ## AggoMigrateTask — zero-boilerplate Maven entry point
 
@@ -489,3 +497,94 @@ object MySqlDialect : MigrationDialect {
     }
 }
 ```
+
+## Aggo vs Hibernate schema updates
+
+| Hibernate | Aggo |
+|-----------|------|
+| `hbm2ddl.auto=update` can mutate schema at startup | Generate a migration plan and review SQL |
+| Entity annotations drive DDL | `Table<E>` descriptors drive DDL |
+| Runtime ORM metadata | Immutable `MigrationSchema` snapshot |
+| Provider decides diff behavior | Aggo emits explicit `MigrationStep`s |
+| Production auto-update is risky | Versioned files and `aggo_schema_versions` |
+
+Aggo's migration flow is closer to Flyway or Liquibase discipline, but the SQL
+is generated from the same schema descriptors used by the query DSL.
+
+## Geracao e Execucao de Migracoes
+
+Aggo consegue gerar migracoes a partir dos objetos `Table<E>`. O fluxo e:
+
+1. declarar as tabelas atuais;
+2. criar um `MigrationSchema`;
+3. comparar com o snapshot anterior;
+4. gerar um `MigrationPlan`;
+5. revisar o SQL;
+6. aplicar e registrar a versao em `aggo_schema_versions`.
+
+```kotlin
+val schema = migrationSchema(
+    version = "2026.05.27.001",
+    tables = listOf(UsersTable, OrdersTable),
+    dialect = PostgresDialect,
+)
+
+val plan = migrationPlan(schema, PostgresDialect)
+println(plan.sql())
+```
+
+### AggoMigrateTask
+
+Para projetos Maven, declare uma task:
+
+```kotlin
+object Migrations : AggoMigrateTask() {
+    override val tables = listOf(UsersTable, OrdersTable)
+    override val dialect = PostgresDialect
+    override val poolConfig = PostgresConfig(
+        host = "localhost",
+        database = "myapp",
+        user = "app",
+        password = System.getenv("DB_PASSWORD"),
+    )
+}
+
+fun main(args: Array<String>) = Migrations.runFromArgs(args)
+```
+
+Comandos principais:
+
+```bash
+mvn compile exec:java -Dexec.args="generate add_users"
+mvn compile exec:java -Dexec.args="status"
+mvn compile exec:java -Dexec.args="dry-run"
+mvn compile exec:java -Dexec.args="apply"
+mvn compile exec:java -Dexec.args="reset"
+```
+
+`drop` e `reset` sao destrutivos e recusam rodar em `AGGO_ENV=prod` sem
+`--force`.
+
+### Tipos customizados
+
+`MigratableCodec` permite gerar `CREATE TYPE` ou `CREATE DOMAIN` antes das
+tabelas:
+
+```kotlin
+object StatusCodec : MigratableCodec<Status> {
+    override val sqlType = String::class.java
+    override val ddlTypeName = "status_type"
+    override val createDdl =
+        "CREATE TYPE status_type AS ENUM ('ACTIVE', 'INACTIVE')"
+
+    override fun encode(value: Status?) = value?.name
+    override fun decode(raw: Any?) = (raw as? String)?.let(Status::valueOf)
+}
+```
+
+### Comparacao com Hibernate
+
+Hibernate pode atualizar schema automaticamente no startup. Isso e conveniente
+em desenvolvimento, mas arriscado em producao. Aggo favorece migracoes
+versionadas e revisaveis: o SQL fica em arquivo, entra no controle de versao e
+e aplicado de forma explicita.

@@ -25,6 +25,7 @@ import com.aggitech.aggo.query.Update
 import com.aggitech.aggo.render.Bound
 import com.aggitech.aggo.render.RenderedSql
 import com.aggitech.aggo.render.renderAggregateSelect
+import com.aggitech.aggo.render.renderCountSelect
 import com.aggitech.aggo.render.renderDelete
 import com.aggitech.aggo.render.renderInsert
 import com.aggitech.aggo.render.renderJoinSelect
@@ -95,9 +96,63 @@ class Session internal constructor(
     suspend fun <E> fetchAll(query: Select<E>): List<E> =
         stream(query).toList()
 
+    /** Typed-result form of [fetchAll]. Database failures are returned as [Query.Failure]. */
+    suspend fun <E> fetchAll(query: Select<E>, errorMap: ConstraintErrorMap): Query<List<E>, AggoError> =
+        capture(errorMap) { fetchAll(query) }
+
     /** Builder-block form of [fetchAll]. */
     suspend fun <E> fetchAll(table: Table<E>, block: SelectBuilder<E>.() -> Unit = {}): List<E> =
         fetchAll(com.aggitech.aggo.dsl.select(table, block))
+
+    /** Builder-block typed-result form of [fetchAll]. */
+    suspend fun <E> fetchAll(
+        table: Table<E>,
+        errorMap: ConstraintErrorMap,
+        block: SelectBuilder<E>.() -> Unit = {},
+    ): Query<List<E>, AggoError> =
+        fetchAll(com.aggitech.aggo.dsl.select(table, block), errorMap)
+
+    /**
+     * Fetches a high-level page using 1-based [page] and positive [size].
+     *
+     * Returns `(entities, count, totalPages)`. The count query reuses the same
+     * filter as [query] and ignores ordering, limit, and offset.
+     */
+    suspend fun <E> paginate(query: Select<E>, page: Int, size: Int): Triple<List<E>, Long, Int> {
+        validatePage(page, size)
+        val offset = pageOffset(page, size)
+        val count = count(query)
+        val entities = fetchAll(query.copy(limit = size, offset = offset))
+        return Triple(entities, count, totalPages(count, size))
+    }
+
+    /** Typed-result form of [paginate]. */
+    suspend fun <E> paginate(
+        query: Select<E>,
+        page: Int,
+        size: Int,
+        errorMap: ConstraintErrorMap,
+    ): Query<Triple<List<E>, Long, Int>, AggoError> =
+        capture(errorMap) { paginate(query, page, size) }
+
+    /** Builder-block form of [paginate]. */
+    suspend fun <E> paginate(
+        table: Table<E>,
+        page: Int,
+        size: Int,
+        block: SelectBuilder<E>.() -> Unit = {},
+    ): Triple<List<E>, Long, Int> =
+        paginate(com.aggitech.aggo.dsl.select(table, block), page, size)
+
+    /** Builder-block typed-result form of [paginate]. */
+    suspend fun <E> paginate(
+        table: Table<E>,
+        page: Int,
+        size: Int,
+        errorMap: ConstraintErrorMap,
+        block: SelectBuilder<E>.() -> Unit = {},
+    ): Query<Triple<List<E>, Long, Int>, AggoError> =
+        paginate(com.aggitech.aggo.dsl.select(table, block), page, size, errorMap)
 
     /**
      * Fetches the first matching row, or `null` if none exists.
@@ -148,6 +203,44 @@ class Session internal constructor(
     /** Builder-block form of [stream]. */
     fun <E> stream(table: Table<E>, block: SelectBuilder<E>.() -> Unit = {}): Flow<E> =
         stream(com.aggitech.aggo.dsl.select(table, block))
+
+    private suspend fun count(query: Select<*>): Long {
+        val rendered = renderCountSelect(query, dialect)
+        var count = 0L
+        executeForResults(rendered).asResultFlow().collect { result ->
+            val mapped: Publisher<Long?> = result.map { row, _ -> row.get(0, Long::class.javaObjectType) }
+            mapped.collect { value -> count = value ?: 0L }
+        }
+        return count
+    }
+
+    private suspend fun <T> capture(
+        errorMap: ConstraintErrorMap,
+        block: suspend () -> T,
+    ): Query<T, AggoError> =
+        try {
+            Query.Success(block())
+        } catch (t: Throwable) {
+            Query.Failure(errorMap.map(t))
+        }
+
+    private fun validatePage(page: Int, size: Int) {
+        require(page >= 1) { "page must be >= 1: $page" }
+        require(size in 1..Select.MAX_LIMIT) { "size out of range: $size" }
+    }
+
+    private fun pageOffset(page: Int, size: Int): Int {
+        val offset = (page.toLong() - 1L) * size.toLong()
+        require(offset <= Int.MAX_VALUE) { "page offset out of range: $offset" }
+        return offset.toInt()
+    }
+
+    private fun totalPages(count: Long, size: Int): Int {
+        if (count == 0L) return 0
+        val pages = ((count - 1L) / size.toLong()) + 1L
+        require(pages <= Int.MAX_VALUE) { "totalPages out of range: $pages" }
+        return pages.toInt()
+    }
 
     /**
      * Executes a LEFT JOIN query and returns all result pairs.

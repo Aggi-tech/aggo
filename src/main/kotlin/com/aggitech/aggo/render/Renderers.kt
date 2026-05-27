@@ -52,6 +52,22 @@ fun renderSelect(query: Select<*>, dialect: SqlDialect, limitOverride: Int? = nu
     return RenderedSql(sql, ctx.params)
 }
 
+/** Render `SELECT COUNT(*)` for the filtered row set of a [Select]. */
+fun renderCountSelect(query: Select<*>, dialect: SqlDialect): RenderedSql {
+    val ctx = RenderContext(dialect)
+    val table = dialect.qualifyTableName(query.table.name)
+
+    val sql = buildString(48 + table.length) {
+        append("SELECT COUNT(*)")
+        append(" FROM ").append(table)
+        query.where?.let {
+            append(" WHERE ").append(PredicateRenderer.render(it, ctx))
+        }
+    }
+
+    return RenderedSql(sql, ctx.params)
+}
+
 fun renderJoinSelect(query: JoinSelect<*, *>, dialect: SqlDialect): RenderedSql {
     val ctx = RenderContext(dialect)
     val leftTable = dialect.qualifyTableName(query.leftTable.name)

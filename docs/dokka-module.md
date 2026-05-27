@@ -1,33 +1,51 @@
 # Module aggo
 
-Aggo is a reflection-free Kotlin DSL on top of R2DBC. The public API follows a
-one-way architecture:
+Aggo is a reflection-free Kotlin DSL for R2DBC. It gives Kotlin services a
+small, explicit database layer: schemas are declared as `Table<E>` objects,
+queries are built with a typed DSL, SQL is rendered by dialects, and runtime
+execution uses R2DBC without annotation scanning or runtime reflection.
 
-```
+Aggo follows a one-way architecture:
+
+```text
 schema -> dsl -> query -> render -> runtime
 ```
 
-The generated API reference is built from KDoc with Dokka. It is intended for
-GitHub Pages publishing and complements the handwritten guides in `/docs`.
+The generated Dokka site includes the API reference and the handwritten user
+guides below. Each guide contains English and Portuguese sections.
 
-## Main entry points
+## Guides / Guias
 
-- `com.aggitech.aggo.runtime.Aggo` for single-database usage.
-- `com.aggitech.aggo.runtime.Session` for query execution inside `read` and
-  `tx` blocks.
-- `com.aggitech.aggo.schema.Table` and `Column` for explicit schema mapping.
-- `com.aggitech.aggo.migration` for migration snapshots and plans.
-- `com.aggitech.aggo.runtime.multitenancy.MultiSchemaAggo` for
-  schema-per-tenant isolation.
-- `com.aggitech.aggo.runtime.multitenancy.MultiDatabaseAggo` for
-  database-per-tenant isolation.
+Dokka renders custom Markdown as module or package documentation. The guides
+are attached to the package pages below:
 
-## Handwritten guides
+| Guide | Dokka page |
+|-------|------------|
+| Getting Started / Primeiros Passos | Module page: `aggo` |
+| Schema Definition / Definicao de Schema | Package page: `com.aggitech.aggo.schema` |
+| Querying / Consultas | Package page: `com.aggitech.aggo.dsl` |
+| Writing Data / Escritas | Package page: `com.aggitech.aggo.runtime` |
+| JOIN Queries / Consultas JOIN | Package page: `com.aggitech.aggo.query` |
+| Migration Generation / Migracoes | Package page: `com.aggitech.aggo.migration` |
+| Multitenancy / Multitenancy | Package page: `com.aggitech.aggo.runtime.multitenancy` |
 
-- [Getting Started](01-getting-started.md)
-- [Schema Definition](02-schema.md)
-- [Querying](03-querying.md)
-- [Writing Data](04-writes.md)
-- [JOIN Queries](05-joins.md)
-- [Migration Generation](06-migrations.md)
-- [Multitenancy](07-multitenancy.md)
+## When coming from Hibernate
+
+Hibernate is an ORM. It tracks entities, uses annotations and reflection, and
+can hide SQL behind a persistence context. Aggo is intentionally closer to SQL:
+there is no lazy loading, no entity manager, no dirty checking, and no runtime
+metadata scan. You write explicit table descriptors and explicit queries.
+
+That trade-off is deliberate. Aggo favors predictable SQL, native-image
+compatibility, and small runtime behavior over ORM automation. If you want
+transparent object graphs and automatic persistence, Hibernate is a better fit.
+If you want explicit database access with Kotlin types and no reflection, use
+Aggo.
+
+## Gerar localmente
+
+```bash
+mvn -q -DskipTests dokka:dokka
+```
+
+The generated site is written to `target/dokka`.

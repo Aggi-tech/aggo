@@ -1,7 +1,14 @@
+# Package com.aggitech.aggo.runtime
+
 # Writing Data
+
+Languages: English first, Portuguese below.
 
 All write operations must run inside an `aggo.tx { }` block. The block runs
 inside a `BEGIN … COMMIT` transaction. Any exception triggers automatic rollback.
+
+Unlike Hibernate, Aggo does not flush dirty entities. A write happens only when
+you call `insert`, `update`, `delete`, or `insertReturning`.
 
 ## INSERT
 
@@ -246,3 +253,119 @@ aggo.insert(UsersTable, user)
 aggo.update(UsersTable) { UsersTable.active setTo false; where { UsersTable.id eq id } }
 aggo.delete(UsersTable) { where { UsersTable.id eq id } }
 ```
+
+## Aggo vs Hibernate writes
+
+| Hibernate | Aggo |
+|-----------|------|
+| Mutate entity properties and flush later | Call `insert`, `update`, or `delete` explicitly |
+| Dirty checking decides SQL | The DSL statement is the SQL shape |
+| Cascades may write related rows | Write related rows in the same `tx` block |
+| Constraint exceptions come from provider/driver | `transaction(errorMap)` can return `ConstraintError` |
+| Persistence context can hide repeated writes | Each Aggo call executes a statement |
+
+Aggo is closer to hand-written SQL with type safety. That makes write paths
+clear in code review and avoids unexpected flushes.
+
+## Escritas
+
+Todas as escritas devem rodar em `aggo.tx { }` ou nos helpers de conveniencia
+de `Aggo`. O bloco `tx` abre uma transacao, executa os comandos e faz commit.
+Se qualquer excecao acontecer, o rollback e executado.
+
+### INSERT
+
+```kotlin
+aggo.tx {
+    insert(UsersTable) {
+        UsersTable.email setTo Email("alice@example.com")
+        UsersTable.name setTo "Alice"
+        UsersTable.active setTo true
+    }
+}
+```
+
+Se voce ja tem a entidade completa:
+
+```kotlin
+aggo.tx {
+    insert(UsersTable, user)
+}
+```
+
+Colunas `isGenerated = true` sao ignoradas no `INSERT`, porque o banco gera o
+valor.
+
+### INSERT RETURNING
+
+Use `insertReturning` para recuperar a chave primaria gerada:
+
+```kotlin
+val id: UserId? = aggo.tx {
+    insertReturning(UsersTable, UsersTable.id) {
+        UsersTable.email setTo Email("alice@example.com")
+        UsersTable.name setTo "Alice"
+    }
+}
+```
+
+### UPDATE
+
+```kotlin
+val affected = aggo.tx {
+    update(UsersTable) {
+        UsersTable.active setTo false
+        where { UsersTable.id eq id }
+    }
+}
+```
+
+Sem `where`, todos os registros da tabela sao alterados. Use isso apenas quando
+for intencional.
+
+### DELETE
+
+```kotlin
+aggo.tx {
+    delete(UsersTable) {
+        where { UsersTable.id eq id }
+    }
+}
+```
+
+### Transacoes com varios comandos
+
+```kotlin
+aggo.tx {
+    val orderId = insertReturning(OrdersTable, OrdersTable.id) {
+        OrdersTable.customerId setTo customerId
+        OrdersTable.status setTo "OPEN"
+    }!!
+
+    insert(OrderLinesTable) {
+        OrderLinesTable.orderId setTo orderId
+        OrderLinesTable.productId setTo productId
+    }
+}
+```
+
+Os dois comandos fazem commit juntos ou rollback juntos.
+
+### Erros como valores
+
+```kotlin
+val result = aggo.transaction(constraintErrorMap(UsersTable)) {
+    insert(UsersTable, user)
+}
+
+result.fold(
+    onSuccess = { rows -> Created(rows) },
+    onFailure = { error -> BadRequest(error) },
+)
+```
+
+### Comparacao com Hibernate
+
+Hibernate pode gravar no banco durante flush, cascade ou commit. Em Aggo, a
+escrita e sempre explicita. Nao existe dirty checking: mudar uma propriedade em
+um objeto Kotlin nao gera SQL. Voce decide o comando e o momento da execucao.

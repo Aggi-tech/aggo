@@ -1,4 +1,8 @@
+# Package com.aggitech.aggo.schema
+
 # Schema Definition
+
+Languages: English first, Portuguese below.
 
 A schema in Aggo is a plain Kotlin `object` that extends `Table<E>`. It lives
 in your infrastructure layer and is the single source of truth for:
@@ -6,6 +10,10 @@ in your infrastructure layer and is the single source of truth for:
 - how each Kotlin type maps to an R2DBC driver type (the Codec)
 - which columns have database-level constraints (CHECK, PRIMARY KEY)
 - how a result `Row` is mapped back to an entity (no reflection)
+
+Compared with Hibernate, this replaces annotation discovery with explicit
+metadata. Aggo never scans entity classes, never reads annotations at runtime,
+and never infers columns from fields. The `Table<E>` object is the contract.
 
 ## Declaring a Table
 
@@ -592,3 +600,91 @@ object LegacyStatusCodec : MigratableCodec<LegacyStatus> {
     override fun decode(raw: Any?): LegacyStatus? = (raw as? String)?.let { LegacyStatus.valueOf(it) }
 }
 ```
+
+## Aggo vs Hibernate schema mapping
+
+| Hibernate | Aggo | Why it matters |
+|-----------|------|----------------|
+| `@Entity` + annotation scan | `object UsersTable : Table<User>` | No runtime reflection or scanning |
+| `@Column(nullable = false)` | `column(..., isNullable = false)` | Nullability is explicit in the table descriptor |
+| `@Id` / `@GeneratedValue` | `isPrimaryKey`, `isGenerated` | Insert rendering knows which columns to skip |
+| Attribute converter | `Codec<V>` or `ValueClassCodec` | Encoding/decoding is explicit and testable |
+| Bean validation annotations | `Checks.*` and database constraints | Rules live in generated DDL |
+| ORM metadata | `MigrationSchema` snapshot | Migrations are based on explicit descriptors |
+
+Hibernate can infer a lot from class structure. Aggo does not infer. That is the
+point: schema code is boring, visible, native-image friendly, and stable under
+refactoring.
+
+## Definicao de Schema
+
+Um schema em Aggo e um `object` Kotlin que estende `Table<E>`. Ele descreve:
+
+- quais colunas existem;
+- qual `Codec` converte cada tipo Kotlin para o driver R2DBC;
+- quais constraints devem virar DDL;
+- como um `Row` do banco vira uma entidade;
+- quais colunas sao geradas pelo banco e devem ser puladas no `INSERT`.
+
+```kotlin
+data class User(
+    val id: UserId,
+    val email: Email,
+    val name: String,
+    val active: Boolean,
+)
+
+object UsersTable : Table<User>("users") {
+    val id = column("id", UserIdCodec, isPrimaryKey = true, isGenerated = true) { it.id }
+    val email = varchar("email", length = 255, check = Checks.email()) { it.email.value }
+    val name = varchar("name", length = 100, check = Checks.notBlank()) { it.name }
+    val active = boolean("active") { it.active }
+
+    override fun fromRow(row: Row) = User(
+        id = id.required(row),
+        email = Email(email.required(row)),
+        name = name.required(row),
+        active = active.required(row),
+    )
+}
+```
+
+### Colunas e flags
+
+Use `isPrimaryKey = true` para chaves primarias, `isGenerated = true` para
+valores gerados pelo banco, `isNullable = true` para colunas opcionais e
+`sensitive = true` para esconder valores em logs.
+
+```kotlin
+val id = uuid("id", isPrimaryKey = true, isGenerated = true) { it.id }
+val passwordHash = text("password_hash", sensitive = true) { it.passwordHash }
+val deletedAt = timestamptz("deleted_at", isNullable = true) { it.deletedAt }
+```
+
+### Codecs
+
+Um `Codec<V>` define como gravar e ler um tipo. Para value classes, use
+`ValueClassCodec`:
+
+```kotlin
+@JvmInline value class Email(val value: String)
+
+val EmailCodec = ValueClassCodec(StringCodec, ::Email, Email::value)
+```
+
+Para tipos de banco como ENUM e DOMAIN, implemente `MigratableCodec`. O gerador
+de migracoes consegue emitir o DDL do tipo antes das tabelas que dependem dele.
+
+### Constraints
+
+`Checks.email()`, `Checks.notBlank()`, `Checks.length(...)`, `Checks.positive()`
+e outros helpers colocam regras no banco. Isso e diferente de validacao apenas
+na aplicacao: a regra tambem protege inserts feitos por jobs, scripts e outros
+servicos.
+
+### Comparacao com Hibernate
+
+No Hibernate, o schema costuma ser espalhado entre anotacoes e configuracoes do
+ORM. Em Aggo, a tabela e o contrato. Nao existe proxy, entity manager ou scan de
+metadados em runtime. A contrapartida e que voce escreve o mapeamento de forma
+explicita, linha por linha.

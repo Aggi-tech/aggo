@@ -14,6 +14,7 @@ import com.aggitech.aggo.runtime.AggoPool
 import com.aggitech.aggo.runtime.AggoUnsafe
 import com.aggitech.aggo.runtime.PoolConfig
 import com.aggitech.aggo.runtime.PostgresConfig
+import com.aggitech.aggo.runtime.Query
 import com.aggitech.aggo.schema.InstantCodec
 import com.aggitech.aggo.schema.IntCodec
 import com.aggitech.aggo.schema.StringCodec
@@ -248,6 +249,60 @@ class IntegrationTest : StringSpec({
         list[0].email shouldBe Email("vc@vc")
 
         aggo.delete(People) { where { People.email eq Email("vc@vc") } }
+    }
+
+    "paginate returns entities count and total pages".config(enabledIf = { dockerAvailable }) {
+        aggo.tx {
+            repeat(5) { i ->
+                insert(People) {
+                    People.email setTo Email("page$i@page")
+                    People.fullName setTo "Page $i"
+                    People.active setTo true
+                }
+            }
+        }
+
+        val (entities, count, totalPages) = aggo.paginate(People, page = 2, size = 2) {
+            where { People.active eq true }
+            orderBy { People.id.asc() }
+        }
+
+        entities.map { it.name } shouldBe listOf("Page 2", "Page 3")
+        count shouldBe 5L
+        totalPages shouldBe 3
+
+        aggo.delete(People)
+    }
+
+    "fetchAll and paginate typed-result overloads return Query values".config(enabledIf = { dockerAvailable }) {
+        aggo.tx {
+            repeat(3) { i ->
+                insert(People) {
+                    People.email setTo Email("typed$i@typed")
+                    People.fullName setTo "Typed $i"
+                    People.active setTo true
+                }
+            }
+        }
+
+        val all: Query<List<Person>, *> = aggo.fetchAll(People, errorMap = com.aggitech.aggo.runtime.ConstraintErrorMap.empty) {
+            where { People.active eq true }
+            orderBy { People.id.asc() }
+        }
+        (all as Query.Success).value.map { it.name } shouldBe listOf("Typed 0", "Typed 1", "Typed 2")
+
+        val page: Query<Triple<List<Person>, Long, Int>, *> =
+            aggo.paginate(People, page = 1, size = 2, errorMap = com.aggitech.aggo.runtime.ConstraintErrorMap.empty) {
+                where { People.active eq true }
+                orderBy { People.id.asc() }
+            }
+        (page as Query.Success).value.let { (entities, count, totalPages) ->
+            entities.map { it.name } shouldBe listOf("Typed 0", "Typed 1")
+            count shouldBe 3L
+            totalPages shouldBe 2
+        }
+
+        aggo.delete(People)
     }
 
     "update returns affected rows".config(enabledIf = { dockerAvailable }) {

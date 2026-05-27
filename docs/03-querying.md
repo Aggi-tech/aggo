@@ -1,4 +1,8 @@
+# Package com.aggitech.aggo.dsl
+
 # Querying
+
+Languages: English first, Portuguese below.
 
 All read operations run inside an `aggo.read { }` block. The block receives a
 `Session` as its receiver (`this`), and the connection is released automatically
@@ -19,6 +23,16 @@ val active = aggo.read {
         offset(40)   // page 3, 20 rows per page
     }
 }
+```
+
+`fetchAll` also has a typed-result overload. Passing a `ConstraintErrorMap`
+changes the return type from `List<E>` to `Query<List<E>, AggoError>`:
+
+```kotlin
+val result: Query<List<User>, AggoError> =
+    aggo.fetchAll(UsersTable, constraintErrorMap(UsersTable)) {
+        where { UsersTable.active eq true }
+    }
 ```
 
 ## fetchOne — load a single row
@@ -212,6 +226,39 @@ fetchAll(UsersTable) {
 
 ## Pagination
 
+Use `paginate` for application pages. It accepts `page` and `size` and returns
+`Triple<List<E>, Long, Int>` as `(entities, count, totalPages)`. `page` is
+1-based.
+
+```kotlin
+val (entities, count, totalPages) = aggo.paginate(
+    UsersTable,
+    page = 1,
+    size = 20,
+) {
+    where { UsersTable.active eq true }
+    orderBy { UsersTable.createdAt.desc() }
+}
+```
+
+The typed-result overload returns database failures as values:
+
+```kotlin
+val result: Query<Triple<List<User>, Long, Int>, AggoError> =
+    aggo.paginate(
+        UsersTable,
+        page = 1,
+        size = 20,
+        errorMap = constraintErrorMap(UsersTable),
+    ) {
+        where { UsersTable.active eq true }
+        orderBy { UsersTable.createdAt.desc() }
+    }
+```
+
+`limit` and `offset` remain low-level query primitives. Prefer `paginate` when
+the caller needs total count and total pages.
+
 ```kotlin
 fun getPage(page: Int, size: Int) = aggo.read {
     fetchAll(UsersTable) {
@@ -222,3 +269,104 @@ fun getPage(page: Int, size: Int) = aggo.read {
     }
 }
 ```
+
+## Aggo vs Hibernate for reads
+
+Hibernate reads often start from object navigation: load an entity, traverse a
+relation, and let the ORM decide when SQL runs. Aggo reads are statement-first.
+You decide exactly which query runs, whether it returns a list, a single row, a
+stream, a projection, an aggregate row, or a page.
+
+This avoids hidden N+1 queries and lazy proxy initialization errors. The trade
+off is that you write the query shape explicitly.
+
+## Consultas
+
+Todas as leituras rodam dentro de `aggo.read { }` ou em helpers de conveniencia
+como `aggo.fetchAll(...)`. O bloco recebe uma `Session` como receiver e a
+conexao e liberada automaticamente ao final.
+
+### Buscar varias entidades
+
+```kotlin
+val users: List<User> = aggo.read {
+    fetchAll(UsersTable) {
+        where { UsersTable.active eq true }
+        orderBy { UsersTable.name.asc() }
+    }
+}
+```
+
+Quando voce passa um `ConstraintErrorMap`, o retorno muda para `Query`:
+
+```kotlin
+val result: Query<List<User>, AggoError> =
+    aggo.fetchAll(UsersTable, constraintErrorMap(UsersTable)) {
+        where { UsersTable.active eq true }
+    }
+```
+
+Sem `errorMap`, erros do banco sao excecoes. Com `errorMap`, eles viram
+`Query.Failure`.
+
+### Buscar uma entidade
+
+```kotlin
+val user: User? = aggo.read {
+    fetchOne(UsersTable) {
+        where { UsersTable.email eq email }
+    }
+}
+```
+
+`fetchOne` sempre envia `LIMIT 1`, mesmo que a query base tenha outro limite.
+
+### Paginacao de alto nivel
+
+Use `paginate` para telas e APIs HTTP. Ela recebe `page` e `size` e retorna uma
+tupla `(entities, count, totalPages)`:
+
+```kotlin
+val (entities, count, totalPages) = aggo.paginate(
+    UsersTable,
+    page = 1,
+    size = 20,
+) {
+    where { UsersTable.active eq true }
+    orderBy { UsersTable.createdAt.desc() }
+}
+```
+
+O `count` usa o mesmo filtro da query e ignora `orderBy`, `limit` e `offset`.
+`totalPages` e calculado com base em `count / size`.
+
+### Operadores WHERE
+
+```kotlin
+where { UsersTable.active eq true }
+where { UsersTable.age gte 18 }
+where { UsersTable.name like "%alice%" }
+where { UsersTable.status inList listOf("ACTIVE", "PENDING") }
+where { UsersTable.deletedAt.isNotNull() }
+where { (UsersTable.active eq true) and (UsersTable.age gte 18) }
+```
+
+### Streams
+
+Use `stream` quando o resultado pode ser grande:
+
+```kotlin
+aggo.read {
+    stream(ReportsTable) {
+        where { ReportsTable.year eq 2026 }
+    }.collect { report ->
+        export(report)
+    }
+}
+```
+
+### Comparacao com Hibernate
+
+No Hibernate, uma leitura pode disparar SQL de forma indireta ao acessar uma
+relacao lazy. Em Aggo, a query e sempre explicita. Isso reduz surpresas, evita
+N+1 escondido e combina melhor com servicos que querem SQL previsivel.
