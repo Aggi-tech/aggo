@@ -4,9 +4,11 @@ import com.aggitech.aggo.dialect.SqlDialect
 import com.aggitech.aggo.dsl.AggregateBuilder
 import com.aggitech.aggo.dsl.DeleteBuilder
 import com.aggitech.aggo.dsl.InsertBuilder
+import com.aggitech.aggo.dsl.ProjectionSelectBuilder
 import com.aggitech.aggo.dsl.SelectBuilder
 import com.aggitech.aggo.dsl.UpdateBuilder
 import com.aggitech.aggo.dsl.aggregate
+import com.aggitech.aggo.dsl.selectProjection
 import com.aggitech.aggo.migration.MigrationFileEntry
 import com.aggitech.aggo.migration.MigrationPlan
 import com.aggitech.aggo.migration.MigrationStep
@@ -16,6 +18,7 @@ import com.aggitech.aggo.query.Delete
 import com.aggitech.aggo.query.Insert
 import com.aggitech.aggo.query.JoinSelect
 import com.aggitech.aggo.query.JoinedRow
+import com.aggitech.aggo.query.ProjectionSelect
 import com.aggitech.aggo.query.Select
 import com.aggitech.aggo.query.Update
 import com.aggitech.aggo.render.RenderedSql
@@ -23,6 +26,7 @@ import com.aggitech.aggo.render.renderAggregateSelect
 import com.aggitech.aggo.render.renderDelete
 import com.aggitech.aggo.render.renderInsert
 import com.aggitech.aggo.render.renderJoinSelect
+import com.aggitech.aggo.render.renderProjectionSelect
 import com.aggitech.aggo.render.renderSelect
 import com.aggitech.aggo.render.renderUpdate
 import com.aggitech.aggo.schema.Column
@@ -167,6 +171,78 @@ class Session internal constructor(
             mapped.collect { value -> emit(value) }
         }
     }
+
+    // ----- PROJECTION SELECT ----------------------------------------------
+
+    /**
+     * Executes a partial-column SELECT and returns all result rows as [ProjectedRow] values.
+     *
+     * Each row's values are decoded by indexing with the same [Column] references used to build the query:
+     *
+     * ```kotlin
+     * val q = selectProjection(UsersTable, UsersTable.id, UsersTable.email) {
+     *     where { UsersTable.active eq true }
+     *     orderBy { UsersTable.name.asc() }
+     *     limit(100)
+     * }
+     *
+     * aggo.read {
+     *     fetchProjection(q).map { row ->
+     *         UserDto(id = row[UsersTable.id]!!, email = row[UsersTable.email]!!)
+     *     }
+     * }
+     * ```
+     */
+    suspend fun <E> fetchProjection(query: ProjectionSelect<E>): List<ProjectedRow> =
+        streamProjection(query).toList()
+
+    /** Inline form of [fetchProjection] — columns and optional block in one call. */
+    suspend fun <E> fetchProjection(
+        table: Table<E>,
+        vararg columns: Column<E, *>,
+        block: ProjectionSelectBuilder<E>.() -> Unit = {},
+    ): List<ProjectedRow> = fetchProjection(selectProjection(table, *columns, block = block))
+
+    /**
+     * Fetches the first projected row, or `null` if none matches.
+     * Always sends `LIMIT 1` to the database.
+     */
+    suspend fun <E> fetchOneProjection(query: ProjectionSelect<E>): ProjectedRow? =
+        flow {
+            val rendered = renderProjectionSelect(query, dialect, limitOverride = 1)
+            executeForResults(rendered).asResultFlow().collect { result ->
+                val mapped: Publisher<ProjectedRow> = result.map { row, _ -> ProjectedRow(row) }
+                mapped.collect { emit(it) }
+            }
+        }.toList().firstOrNull()
+
+    /** Inline form of [fetchOneProjection]. */
+    suspend fun <E> fetchOneProjection(
+        table: Table<E>,
+        vararg columns: Column<E, *>,
+        block: ProjectionSelectBuilder<E>.() -> Unit = {},
+    ): ProjectedRow? = fetchOneProjection(selectProjection(table, *columns, block = block))
+
+    /**
+     * Returns a cold [Flow] that streams projected rows one at a time.
+     * Prefer this over [fetchProjection] for large result sets.
+     *
+     * The flow must be collected inside the same [Aggo.read] or [Aggo.tx] block.
+     */
+    fun <E> streamProjection(query: ProjectionSelect<E>): Flow<ProjectedRow> = flow {
+        val rendered = renderProjectionSelect(query, dialect)
+        executeForResults(rendered).asResultFlow().collect { result ->
+            val mapped: Publisher<ProjectedRow> = result.map { row, _ -> ProjectedRow(row) }
+            mapped.collect { value -> emit(value) }
+        }
+    }
+
+    /** Inline form of [streamProjection]. */
+    fun <E> streamProjection(
+        table: Table<E>,
+        vararg columns: Column<E, *>,
+        block: ProjectionSelectBuilder<E>.() -> Unit = {},
+    ): Flow<ProjectedRow> = streamProjection(selectProjection(table, *columns, block = block))
 
     // ----- AGGREGATE SELECT -----------------------------------------------
 

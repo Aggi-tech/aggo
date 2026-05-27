@@ -7,6 +7,7 @@ import com.aggitech.aggo.query.Delete
 import com.aggitech.aggo.query.Expr
 import com.aggitech.aggo.query.Insert
 import com.aggitech.aggo.query.JoinSelect
+import com.aggitech.aggo.query.ProjectionSelect
 import com.aggitech.aggo.query.Select
 import com.aggitech.aggo.query.Update
 import com.aggitech.aggo.schema.Codec
@@ -177,6 +178,42 @@ fun renderAggregateSelect(query: AggregateSelect<*>, dialect: SqlDialect): Rende
         }
 
         query.limit?.let { append(" LIMIT ").append(it) }
+        query.offset?.let { append(" OFFSET ").append(it) }
+    }
+
+    return RenderedSql(sql, ctx.params)
+}
+
+/**
+ * Render a partial-column SELECT —
+ * `SELECT col1, col2 FROM table [WHERE ...] [ORDER BY ...] [LIMIT/OFFSET]`.
+ *
+ * Only the columns listed in [ProjectionSelect.columns] appear in the SELECT list.
+ * [limitOverride] lets [com.aggitech.aggo.runtime.Session.fetchOneProjection] force `LIMIT 1`.
+ */
+fun renderProjectionSelect(
+    query: ProjectionSelect<*>,
+    dialect: SqlDialect,
+    limitOverride: Int? = null,
+): RenderedSql {
+    val ctx = RenderContext(dialect)
+    val table = dialect.quoteIdentifier(query.table.name)
+    val effectiveLimit = limitOverride ?: query.limit
+
+    val columns = query.columns.joinToString(", ") { dialect.quoteIdentifier(it.name) }
+
+    val sql = buildString(64 + columns.length) {
+        append("SELECT ").append(columns)
+        append(" FROM ").append(table)
+        query.where?.let { append(" WHERE ").append(PredicateRenderer.render(it, ctx)) }
+        if (query.orderBy.isNotEmpty()) {
+            append(" ORDER BY ")
+            append(query.orderBy.joinToString(", ") { o ->
+                val col = "${dialect.quoteIdentifier(o.column.table.name)}.${dialect.quoteIdentifier(o.column.name)}"
+                "$col ${o.direction.name}"
+            })
+        }
+        if (effectiveLimit != null) append(" LIMIT ").append(effectiveLimit)
         query.offset?.let { append(" OFFSET ").append(it) }
     }
 

@@ -3,6 +3,7 @@ package com.aggitech.aggo.dsl
 import com.aggitech.aggo.query.OrderDir
 import com.aggitech.aggo.query.Ordering
 import com.aggitech.aggo.query.Predicate
+import com.aggitech.aggo.query.ProjectionSelect
 import com.aggitech.aggo.query.Select
 import com.aggitech.aggo.schema.Column
 import com.aggitech.aggo.schema.Table
@@ -101,3 +102,72 @@ class SelectBuilder<E> internal constructor(val table: Table<E>) {
  */
 fun <E> select(table: Table<E>, block: SelectBuilder<E>.() -> Unit = {}): Select<E> =
     SelectBuilder(table).apply(block).build()
+
+/**
+ * Builder for partial-column SELECT queries. Obtained via [selectProjection].
+ *
+ * Columns declared in the vararg are projected in order. Additional columns can
+ * be added inside the block with `+Column`:
+ *
+ * ```kotlin
+ * selectProjection(UsersTable, UsersTable.id, UsersTable.email) {
+ *     +UsersTable.name
+ *     where { UsersTable.active eq true }
+ *     orderBy { UsersTable.createdAt.desc() }
+ *     limit(50)
+ * }
+ * ```
+ */
+class ProjectionSelectBuilder<E> internal constructor(
+    val table: Table<E>,
+    initialColumns: List<Column<E, *>>,
+) {
+    private val columns: MutableList<Column<E, *>> = initialColumns.toMutableList()
+    private var where: Predicate? = null
+    private val orderBy: MutableList<Ordering<E, *>> = mutableListOf()
+    private var limit: Int? = null
+    private var offset: Int? = null
+
+    /** Add a column to the projection list. */
+    operator fun <V> Column<E, V>.unaryPlus() { columns += this }
+
+    fun where(block: WhereScope.() -> Predicate) { where = WhereScope.block() }
+    fun orderBy(block: OrderByScope<E>.() -> Unit) { OrderByScope(orderBy).block() }
+    fun limit(n: Int) { limit = n }
+    fun offset(n: Int) { offset = n }
+
+    internal fun build(): ProjectionSelect<E> =
+        ProjectionSelect(table, columns.toList(), where, orderBy.toList(), limit, offset)
+}
+
+/**
+ * Builds a partial-column SELECT query.
+ *
+ * Only the listed [columns] are sent to the database. Results are decoded into
+ * [com.aggitech.aggo.runtime.ProjectedRow] and indexed by the same [Column] references.
+ *
+ * ```kotlin
+ * // Simple projection
+ * val q = selectProjection(UsersTable, UsersTable.id, UsersTable.email)
+ *
+ * // With filter and ordering
+ * val q = selectProjection(UsersTable, UsersTable.id, UsersTable.email) {
+ *     where { UsersTable.active eq true }
+ *     orderBy { UsersTable.name.asc() }
+ *     limit(100)
+ * }
+ *
+ * // Execute and map to a DTO
+ * aggo.read {
+ *     fetchProjection(q).map { row ->
+ *         UserDto(id = row[UsersTable.id]!!, email = row[UsersTable.email]!!)
+ *     }
+ * }
+ * ```
+ */
+fun <E> selectProjection(
+    table: Table<E>,
+    vararg columns: Column<E, *>,
+    block: ProjectionSelectBuilder<E>.() -> Unit = {},
+): ProjectionSelect<E> =
+    ProjectionSelectBuilder(table, columns.toList()).apply(block).build()

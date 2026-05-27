@@ -131,3 +131,38 @@ data class Delete<E>(
     override val table: Table<E>,
     val where: Predicate? = null,
 ) : Query<E>
+
+/**
+ * A SELECT query that returns only a subset of columns, decoded into [com.aggitech.aggo.runtime.ProjectedRow].
+ *
+ * Build with [com.aggitech.aggo.dsl.selectProjection]. Execute with
+ * [com.aggitech.aggo.runtime.Session.fetchProjection] or [com.aggitech.aggo.runtime.Session.streamProjection].
+ *
+ * ```kotlin
+ * val q = selectProjection(UsersTable, UsersTable.id, UsersTable.email) {
+ *     where { UsersTable.active eq true }
+ *     orderBy { UsersTable.name.asc() }
+ *     limit(50)
+ * }
+ *
+ * aggo.read {
+ *     fetchProjection(q).map { row ->
+ *         UserDto(id = row[UsersTable.id]!!, email = row[UsersTable.email]!!)
+ *     }
+ * }
+ * ```
+ */
+data class ProjectionSelect<E>(
+    override val table: Table<E>,
+    val columns: List<Column<E, *>>,
+    val where: Predicate? = null,
+    val orderBy: List<Ordering<E, *>> = emptyList(),
+    val limit: Int? = null,
+    val offset: Int? = null,
+) : Query<E> {
+    init {
+        require(columns.isNotEmpty()) { "ProjectionSelect requires at least one column" }
+        if (limit != null) require(limit in 0..Select.MAX_LIMIT) { "limit out of range: $limit" }
+        if (offset != null) require(offset >= 0) { "offset must be >= 0: $offset" }
+    }
+}
