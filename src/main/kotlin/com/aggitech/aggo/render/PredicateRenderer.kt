@@ -2,6 +2,7 @@ package com.aggitech.aggo.render
 
 import com.aggitech.aggo.query.Operand
 import com.aggitech.aggo.query.Predicate
+import com.aggitech.aggo.schema.StringCodec
 
 internal object PredicateRenderer {
 
@@ -22,6 +23,20 @@ internal object PredicateRenderer {
             val placeholder = ctx.bind(predicate.pattern, com.aggitech.aggo.schema.StringCodec, sourceColumn)
             val op = if (predicate.negated) "NOT LIKE" else "LIKE"
             "$operand $op $placeholder"
+        }
+
+        is Predicate.ILike -> {
+            val sourceColumn = predicate.operand.columnRef()
+            val operand = renderOperand(predicate.operand, ctx, sourceColumn)
+            val placeholder = ctx.bind(predicate.pattern, StringCodec, sourceColumn)
+            ctx.dialect.renderLikeIgnoreCase(operand, placeholder, predicate.negated)
+        }
+
+        is Predicate.RegexMatch -> {
+            val sourceColumn = predicate.operand.columnRef()
+            val operand = renderOperand(predicate.operand, ctx, sourceColumn)
+            val placeholder = ctx.bind(predicate.pattern, StringCodec, sourceColumn)
+            ctx.dialect.renderRegexMatch(operand, placeholder, predicate.caseInsensitive, predicate.negated)
         }
 
         is Predicate.In<*> -> renderIn(predicate, ctx)

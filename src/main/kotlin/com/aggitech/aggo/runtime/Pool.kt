@@ -6,6 +6,7 @@ import io.r2dbc.pool.ConnectionPool
 import io.r2dbc.pool.ConnectionPoolConfiguration
 import io.r2dbc.spi.Connection
 import io.r2dbc.spi.ConnectionFactories
+import io.r2dbc.spi.ConnectionFactory
 import io.r2dbc.spi.ConnectionFactoryOptions
 import io.r2dbc.spi.ValidationDepth
 import kotlinx.coroutines.reactive.awaitFirstOrNull
@@ -120,6 +121,28 @@ class AggoPool internal constructor(
 
     companion object {
         /**
+         * Creates an [AggoPool] from a caller-provided R2DBC [ConnectionFactory]
+         * and SQL dialect. Use this for non-PostgreSQL drivers or custom pool
+         * wiring while keeping Aggo execution on the dialect boundary.
+         */
+        fun r2dbc(
+            factory: ConnectionFactory,
+            dialect: SqlDialect,
+            pool: PoolConfig = PoolConfig(),
+        ): AggoPool {
+            val poolConfig = ConnectionPoolConfiguration.builder(factory)
+                .initialSize(pool.initialSize)
+                .maxSize(pool.maxSize)
+                .maxIdleTime(pool.maxIdleTime)
+                .maxAcquireTime(pool.maxAcquireTime)
+                .validationQuery(pool.validationQuery)
+                .validationDepth(ValidationDepth.REMOTE)
+                .build()
+
+            return AggoPool(ConnectionPool(poolConfig), dialect)
+        }
+
+        /**
          * Creates an [AggoPool] connected to a PostgreSQL database.
          *
          * ```kotlin
@@ -148,18 +171,7 @@ class AggoPool internal constructor(
                 config.pool.preparedStatementCacheQueries,
             )
 
-            val factory = ConnectionFactories.get(optionsBuilder.build())
-
-            val poolConfig = ConnectionPoolConfiguration.builder(factory)
-                .initialSize(config.pool.initialSize)
-                .maxSize(config.pool.maxSize)
-                .maxIdleTime(config.pool.maxIdleTime)
-                .maxAcquireTime(config.pool.maxAcquireTime)
-                .validationQuery(config.pool.validationQuery)
-                .validationDepth(ValidationDepth.REMOTE)
-                .build()
-
-            return AggoPool(ConnectionPool(poolConfig), PostgresDialect)
+            return r2dbc(ConnectionFactories.get(optionsBuilder.build()), PostgresDialect, config.pool)
         }
     }
 }

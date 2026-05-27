@@ -1,5 +1,6 @@
 package com.aggitech.aggo.runtime
 
+import com.aggitech.aggo.dialect.InsertReturnStrategy
 import com.aggitech.aggo.dialect.SqlDialect
 import com.aggitech.aggo.dsl.AggregateBuilder
 import com.aggitech.aggo.dsl.DeleteBuilder
@@ -21,6 +22,7 @@ import com.aggitech.aggo.query.JoinedRow
 import com.aggitech.aggo.query.ProjectionSelect
 import com.aggitech.aggo.query.Select
 import com.aggitech.aggo.query.Update
+import com.aggitech.aggo.render.Bound
 import com.aggitech.aggo.render.RenderedSql
 import com.aggitech.aggo.render.renderAggregateSelect
 import com.aggitech.aggo.render.renderDelete
@@ -32,6 +34,7 @@ import com.aggitech.aggo.render.renderUpdate
 import com.aggitech.aggo.schema.Column
 import com.aggitech.aggo.schema.Table
 import io.r2dbc.spi.Connection
+import io.r2dbc.spi.Parameters
 import io.r2dbc.spi.Result
 import io.r2dbc.spi.Row
 import kotlinx.coroutines.flow.Flow
@@ -301,7 +304,8 @@ class Session internal constructor(
     // ----- INSERT ---------------------------------------------------------
 
     /** Execute a pre-built [Insert] query. Returns the number of rows affected. */
-    suspend fun <E> insert(query: Insert<E>): Long = executeUpdate(renderInsert(query, dialect))
+    suspend fun <E> insert(query: Insert<E>): Long =
+        executeUpdate(renderInsert(query, dialect).asRenderedSql())
 
     /**
      * Insert an entity by walking its [Table]'s writable columns (those with
@@ -345,6 +349,19 @@ class Session internal constructor(
      */
     suspend fun <E, V> insertReturning(query: Insert<E>, pkColumn: Column<E, V>): V? {
         val rendered = renderInsert(query, dialect, returningPk = true)
+        return when (val strategy = rendered.returnStrategy) {
+            null -> null
+            is InsertReturnStrategy.AppendClause -> executeInsertReturningFromResult(rendered.asRenderedSql(), pkColumn)
+            is InsertReturnStrategy.PostInsertSelect -> {
+                executeUpdate(rendered.asRenderedSql())
+                val pkParams = primaryKeyBounds(query)
+                executeInsertReturningFromResult(RenderedSql(strategy.sql, pkParams), pkColumn)
+            }
+            is InsertReturnStrategy.ReturningInto -> executeInsertReturningFromOutParams(rendered, strategy, pkColumn)
+        }
+    }
+
+    private suspend fun <E, V> executeInsertReturningFromResult(rendered: RenderedSql, pkColumn: Column<E, V>): V? {
         val statement = connection.createStatement(rendered.sql)
         Binder.bind(statement, rendered.params)
         QueryLog.beforeExecute(rendered.sql, rendered.params)
@@ -360,6 +377,43 @@ class Session internal constructor(
             throw t
         }
     }
+
+    private suspend fun <E, V> executeInsertReturningFromOutParams(
+        rendered: com.aggitech.aggo.render.RenderedInsert,
+        strategy: InsertReturnStrategy.ReturningInto,
+        pkColumn: Column<E, V>,
+    ): V? {
+        val statement = connection.createStatement(rendered.sql)
+        Binder.bind(statement, rendered.params)
+        strategy.outParams.forEach { outParam ->
+            statement.bind(outParam.bindName, Parameters.out(outParam.sqlType))
+        }
+        QueryLog.beforeExecute(rendered.sql, rendered.params)
+        return try {
+            val keys = mutableListOf<V?>()
+            statement.execute().asResultFlow().collect { result ->
+                val keyPublisher: Publisher<V?> = result.map { readable ->
+                    @Suppress("UNCHECKED_CAST")
+                    val sqlType = pkColumn.codec.sqlType as Class<Any>
+                    pkColumn.codec.decode(readable.get(0, sqlType))
+                }
+                keyPublisher.collect { keys += it }
+            }
+            keys.firstOrNull()
+        } catch (t: Throwable) {
+            QueryLog.onError(rendered.sql, t)
+            throw t
+        }
+    }
+
+    private fun <E> primaryKeyBounds(query: Insert<E>): List<Bound> =
+        query.table.primaryKeys.map { pk ->
+            val assignment = query.assignments.firstOrNull { it.column == pk }
+            requireNotNull(assignment) {
+                "MySQL insertReturning requires primary key '${pk.table.name}.${pk.name}' to be assigned in the INSERT"
+            }
+            Bound(assignment.value, assignment.codec, assignment.column)
+        }
 
     suspend fun <E, V> insertReturning(
         table: Table<E>,

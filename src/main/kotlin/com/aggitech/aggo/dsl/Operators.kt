@@ -87,6 +87,21 @@ infix fun <E> Column<E, String>.like(pattern: String): Predicate =
 infix fun <E> Column<E, String>.notLike(pattern: String): Predicate =
     Predicate.Like(col(this), pattern, negated = true)
 
+infix fun <E> Column<E, String>.ilike(pattern: String): Predicate =
+    Predicate.ILike(col(this), pattern, negated = false)
+
+infix fun <E> Column<E, String>.notIlike(pattern: String): Predicate =
+    Predicate.ILike(col(this), pattern, negated = true)
+
+infix fun <E> Column<E, String>.matchesRegex(pattern: String): Predicate =
+    Predicate.RegexMatch(col(this), pattern, caseInsensitive = false, negated = false)
+
+infix fun <E> Column<E, String>.matchesRegexIgnoreCase(pattern: String): Predicate =
+    Predicate.RegexMatch(col(this), pattern, caseInsensitive = true, negated = false)
+
+infix fun <E> Column<E, String>.notMatchesRegex(pattern: String): Predicate =
+    Predicate.RegexMatch(col(this), pattern, caseInsensitive = false, negated = true)
+
 infix fun <E, V> Column<E, V>.inList(values: Collection<V?>): Predicate =
     Predicate.In(col(this), values.toList(), this.codec, negated = false)
 

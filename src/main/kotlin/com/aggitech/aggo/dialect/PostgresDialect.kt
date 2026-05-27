@@ -1,6 +1,7 @@
 package com.aggitech.aggo.dialect
 
 import com.aggitech.aggo.schema.Codec
+import com.aggitech.aggo.schema.Column
 import com.aggitech.aggo.schema.MigratableCodec
 import java.math.BigDecimal
 import java.time.LocalDate
@@ -17,6 +18,39 @@ object PostgresDialect : MigrationDialect {
         // doubling is defense-in-depth in case the validator is ever loosened.
         val escaped = name.replace("\"", "\"\"")
         return "\"$escaped\""
+    }
+
+    override fun renderPagination(limit: Int?, offset: Int?): String = buildString {
+        limit?.let { append("LIMIT ").append(it) }
+        offset?.let {
+            if (isNotEmpty()) append(' ')
+            append("OFFSET ").append(it)
+        }
+    }
+
+    override fun renderLikeIgnoreCase(operand: String, pattern: String, negated: Boolean): String =
+        if (negated) "$operand NOT ILIKE $pattern" else "$operand ILIKE $pattern"
+
+    override fun renderRegexMatch(
+        operand: String,
+        pattern: String,
+        caseInsensitive: Boolean,
+        negated: Boolean,
+    ): String {
+        val operator = when {
+            !negated && !caseInsensitive -> "~"
+            !negated && caseInsensitive -> "~*"
+            negated && !caseInsensitive -> "!~"
+            else -> "!~*"
+        }
+        return "$operand $operator $pattern"
+    }
+
+    override fun insertReturnStrategy(primaryKeyColumns: List<Column<*, *>>): InsertReturnStrategy {
+        require(primaryKeyColumns.isNotEmpty()) { "INSERT RETURNING requires at least one primary key column" }
+        return InsertReturnStrategy.AppendClause(
+            "RETURNING ${primaryKeyColumns.joinToString(", ") { quoteIdentifier(it.name) }}",
+        )
     }
 
     /**

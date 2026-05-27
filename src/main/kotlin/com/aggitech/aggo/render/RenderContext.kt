@@ -1,5 +1,6 @@
 package com.aggitech.aggo.render
 
+import com.aggitech.aggo.dialect.InsertReturnStrategy
 import com.aggitech.aggo.dialect.SqlDialect
 import com.aggitech.aggo.schema.Codec
 import com.aggitech.aggo.schema.Column
@@ -22,6 +23,15 @@ data class Bound(
 /** Final output of a renderer: the SQL string and its bound parameters, in order. */
 data class RenderedSql(val sql: String, val params: List<Bound>) {
     override fun toString(): String = "RenderedSql(sql=$sql, params.size=${params.size})"
+}
+
+/** Rendered INSERT plus dialect-specific primary-key return strategy. */
+data class RenderedInsert(
+    val sql: String,
+    val params: List<Bound>,
+    val returnStrategy: InsertReturnStrategy?,
+) {
+    fun asRenderedSql(): RenderedSql = RenderedSql(sql, params)
 }
 
 /**

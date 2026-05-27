@@ -1,5 +1,7 @@
 package com.aggitech.aggo.dialect
 
+import com.aggitech.aggo.schema.Column
+
 /**
  * Bare minimum interface differentiating drivers. Postgres uses `$1, $2`;
  * MySQL uses `?`; identifier quoting differs too. Renderers go through this
@@ -11,6 +13,23 @@ interface SqlDialect {
 
     /** Quote (and validate) an identifier so it is safe to interpolate. */
     fun quoteIdentifier(name: String): String
+
+    /** Render dialect-specific LIMIT/OFFSET syntax. Empty string means no clause. */
+    fun renderPagination(limit: Int?, offset: Int?): String
+
+    /** Render a case-insensitive LIKE predicate for this dialect. */
+    fun renderLikeIgnoreCase(operand: String, pattern: String, negated: Boolean): String
+
+    /** Render a regex predicate for this dialect. */
+    fun renderRegexMatch(
+        operand: String,
+        pattern: String,
+        caseInsensitive: Boolean,
+        negated: Boolean,
+    ): String
+
+    /** Choose the dialect-specific strategy used when an INSERT returns PK columns. */
+    fun insertReturnStrategy(primaryKeyColumns: List<Column<*, *>>): InsertReturnStrategy
 }
 
 /** Strict identifier allowlist: letters, digits, underscore; must start with letter/underscore. */

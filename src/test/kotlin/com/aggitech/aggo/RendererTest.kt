@@ -1,5 +1,7 @@
 package com.aggitech.aggo
 
+import com.aggitech.aggo.dialect.MySqlDialect
+import com.aggitech.aggo.dialect.OracleDialect
 import com.aggitech.aggo.dialect.PostgresDialect
 import com.aggitech.aggo.dsl.aggregate
 import com.aggitech.aggo.dsl.and
@@ -15,12 +17,17 @@ import com.aggitech.aggo.dsl.gt
 import com.aggitech.aggo.dsl.gte
 import com.aggitech.aggo.dsl.inList
 import com.aggitech.aggo.dsl.insert
+import com.aggitech.aggo.dsl.ilike
 import com.aggitech.aggo.dsl.isNotNull
 import com.aggitech.aggo.dsl.leftJoin
 import com.aggitech.aggo.dsl.limit
 import com.aggitech.aggo.dsl.like
 import com.aggitech.aggo.dsl.lower
 import com.aggitech.aggo.dsl.minus
+import com.aggitech.aggo.dsl.matchesRegex
+import com.aggitech.aggo.dsl.matchesRegexIgnoreCase
+import com.aggitech.aggo.dsl.notIlike
+import com.aggitech.aggo.dsl.notMatchesRegex
 import com.aggitech.aggo.dsl.orderBy
 import com.aggitech.aggo.dsl.or
 import com.aggitech.aggo.dsl.plus
@@ -79,6 +86,78 @@ class RendererTest : StringSpec({
             """WHERE "people"."active" = ${'$'}1 """ +
             """ORDER BY "people"."created_at" DESC, "people"."name" ASC """ +
             """LIMIT 10 OFFSET 20"""
+    }
+
+    "select renders MySQL placeholders quotes and pagination" {
+        val q = select(People) {
+            where { People.fullName ilike "%ann%" }
+            orderBy { People.fullName.asc() }
+            limit(10)
+            offset(20)
+        }
+        val r = renderSelect(q, MySqlDialect)
+        r.sql shouldBe
+            "SELECT `id`, `email`, `name`, `active`, `created_at` FROM `people` " +
+            "WHERE `people`.`name` LIKE ? " +
+            "ORDER BY `people`.`name` ASC " +
+            "LIMIT 10 OFFSET 20"
+        r.params.map { it.value } shouldBe listOf("%ann%")
+    }
+
+    "select renders Oracle placeholders quotes and pagination" {
+        val q = select(People) {
+            where { People.fullName matchesRegexIgnoreCase "^ann" }
+            orderBy { People.fullName.asc() }
+            limit(10)
+            offset(20)
+        }
+        val r = renderSelect(q, OracleDialect)
+        r.sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" """ +
+            """WHERE REGEXP_LIKE("people"."name", :1, 'i') """ +
+            """ORDER BY "people"."name" ASC """ +
+            """OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY"""
+        r.params.map { it.value } shouldBe listOf("^ann")
+    }
+
+    "ilike predicate renders for each dialect" {
+        val q = select(People) { where { People.fullName ilike "%alice%" } }
+        renderSelect(q, PostgresDialect).sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" WHERE "people"."name" ILIKE ${'$'}1"""
+        renderSelect(q, MySqlDialect).sql shouldBe
+            "SELECT `id`, `email`, `name`, `active`, `created_at` FROM `people` WHERE `people`.`name` LIKE ?"
+        renderSelect(q, OracleDialect).sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" WHERE REGEXP_LIKE("people"."name", :1, 'i')"""
+    }
+
+    "not ilike predicate renders for each dialect" {
+        val q = select(People) { where { People.fullName notIlike "%alice%" } }
+        renderSelect(q, PostgresDialect).sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" WHERE "people"."name" NOT ILIKE ${'$'}1"""
+        renderSelect(q, MySqlDialect).sql shouldBe
+            "SELECT `id`, `email`, `name`, `active`, `created_at` FROM `people` WHERE `people`.`name` NOT LIKE ?"
+        renderSelect(q, OracleDialect).sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" WHERE NOT REGEXP_LIKE("people"."name", :1, 'i')"""
+    }
+
+    "regex predicate renders for each dialect" {
+        val q = select(People) { where { People.fullName matchesRegex "^A" } }
+        renderSelect(q, PostgresDialect).sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" WHERE "people"."name" ~ ${'$'}1"""
+        renderSelect(q, MySqlDialect).sql shouldBe
+            "SELECT `id`, `email`, `name`, `active`, `created_at` FROM `people` WHERE `people`.`name` REGEXP ?"
+        renderSelect(q, OracleDialect).sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" WHERE REGEXP_LIKE("people"."name", :1)"""
+    }
+
+    "negated regex predicate renders for each dialect" {
+        val q = select(People) { where { People.fullName notMatchesRegex "^A" } }
+        renderSelect(q, PostgresDialect).sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" WHERE "people"."name" !~ ${'$'}1"""
+        renderSelect(q, MySqlDialect).sql shouldBe
+            "SELECT `id`, `email`, `name`, `active`, `created_at` FROM `people` WHERE `people`.`name` NOT REGEXP ?"
+        renderSelect(q, OracleDialect).sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" WHERE NOT REGEXP_LIKE("people"."name", :1)"""
     }
 
     "select with IN list, BETWEEN, OR" {

@@ -1,5 +1,6 @@
 package com.aggitech.aggo.render
 
+import com.aggitech.aggo.dialect.InsertReturnStrategy
 import com.aggitech.aggo.dialect.SqlDialect
 import com.aggitech.aggo.query.AggregateSelect
 import com.aggitech.aggo.query.Assignment
@@ -45,8 +46,7 @@ fun renderSelect(query: Select<*>, dialect: SqlDialect, limitOverride: Int? = nu
                 "$col ${o.direction.name}"
             })
         }
-        if (effectiveLimit != null) append(" LIMIT ").append(effectiveLimit)
-        query.offset?.let { append(" OFFSET ").append(it) }
+        appendPagination(dialect, effectiveLimit, query.offset)
     }
 
     return RenderedSql(sql, ctx.params)
@@ -76,14 +76,13 @@ fun renderJoinSelect(query: JoinSelect<*, *>, dialect: SqlDialect): RenderedSql 
                 "${renderQualifiedColumn(o.column, dialect)} ${o.direction.name}"
             })
         }
-        query.limit?.let { append(" LIMIT ").append(it) }
-        query.offset?.let { append(" OFFSET ").append(it) }
+        appendPagination(dialect, query.limit, query.offset)
     }
 
     return RenderedSql(sql, ctx.params)
 }
 
-fun renderInsert(query: Insert<*>, dialect: SqlDialect, returningPk: Boolean = false): RenderedSql {
+fun renderInsert(query: Insert<*>, dialect: SqlDialect, returningPk: Boolean = false): RenderedInsert {
     val ctx = RenderContext(dialect)
     val table = dialect.quoteIdentifier(query.table.name)
 
@@ -91,19 +90,23 @@ fun renderInsert(query: Insert<*>, dialect: SqlDialect, returningPk: Boolean = f
     val placeholders = query.assignments.joinToString(", ") { bindAssignment(it, ctx) }
 
     // P-1: rough size estimate
-    val sql = buildString(48 + table.length + cols.length + placeholders.length) {
+    val baseSql = buildString(48 + table.length + cols.length + placeholders.length) {
         append("INSERT INTO ").append(table)
         append(" (").append(cols).append(")")
         append(" VALUES (").append(placeholders).append(")")
-
-        if (returningPk) {
-            val pks = query.table.primaryKeys
-            require(pks.isNotEmpty()) { "RETURNING requested but table '${query.table.name}' has no primary key" }
-            append(" RETURNING ")
-            append(pks.joinToString(", ") { dialect.quoteIdentifier(it.name) })
-        }
     }
-    return RenderedSql(sql, ctx.params)
+
+    if (!returningPk) return RenderedInsert(baseSql, ctx.params, null)
+
+    val pks = query.table.primaryKeys
+    require(pks.isNotEmpty()) { "RETURNING requested but table '${query.table.name}' has no primary key" }
+    val strategy = dialect.insertReturnStrategy(pks)
+    val sql = when (strategy) {
+        is InsertReturnStrategy.AppendClause -> "$baseSql ${strategy.clause}"
+        is InsertReturnStrategy.ReturningInto -> "$baseSql ${strategy.clause}"
+        is InsertReturnStrategy.PostInsertSelect -> baseSql
+    }
+    return RenderedInsert(sql, ctx.params, strategy)
 }
 
 fun renderUpdate(query: Update<*>, dialect: SqlDialect): RenderedSql {
@@ -177,8 +180,7 @@ fun renderAggregateSelect(query: AggregateSelect<*>, dialect: SqlDialect): Rende
             })
         }
 
-        query.limit?.let { append(" LIMIT ").append(it) }
-        query.offset?.let { append(" OFFSET ").append(it) }
+        appendPagination(dialect, query.limit, query.offset)
     }
 
     return RenderedSql(sql, ctx.params)
@@ -213,8 +215,7 @@ fun renderProjectionSelect(
                 "$col ${o.direction.name}"
             })
         }
-        if (effectiveLimit != null) append(" LIMIT ").append(effectiveLimit)
-        query.offset?.let { append(" OFFSET ").append(it) }
+        appendPagination(dialect, effectiveLimit, query.offset)
     }
 
     return RenderedSql(sql, ctx.params)
@@ -229,3 +230,8 @@ private fun <V> bindAssignment(a: Assignment<*, V>, ctx: RenderContext): String 
 
 private fun renderQualifiedColumn(column: Column<*, *>, dialect: SqlDialect): String =
     "${dialect.quoteIdentifier(column.table.name)}.${dialect.quoteIdentifier(column.name)}"
+
+private fun StringBuilder.appendPagination(dialect: SqlDialect, limit: Int?, offset: Int?) {
+    val pagination = dialect.renderPagination(limit, offset)
+    if (pagination.isNotEmpty()) append(' ').append(pagination)
+}

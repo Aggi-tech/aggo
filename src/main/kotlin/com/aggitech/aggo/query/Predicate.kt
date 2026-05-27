@@ -10,6 +10,13 @@ enum class ComparisonOp(val symbol: String) {
 sealed interface Predicate {
     data class Cmp(val left: Operand, val op: ComparisonOp, val right: Operand) : Predicate
     data class Like(val operand: Operand, val pattern: String, val negated: Boolean = false) : Predicate
+    data class ILike(val operand: Operand, val pattern: String, val negated: Boolean = false) : Predicate
+    data class RegexMatch(
+        val operand: Operand,
+        val pattern: String,
+        val caseInsensitive: Boolean,
+        val negated: Boolean = false,
+    ) : Predicate
     data class In<V>(
         val operand: Operand,
         val values: List<V?>,
