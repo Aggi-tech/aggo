@@ -144,7 +144,7 @@ one of two ways:
 
 | What | Default path | Override via |
 |------|-------------|--------------|
-| Schema snapshot | `src/main/resources/aggo/snapshot.json` | `-Daggo.snapshotFile=…` or `override val snapshotFile` |
+| Schema snapshot | `target/aggo/snapshot.json` for Maven, `build/aggo/snapshot.json` for Gradle | `-Daggo.snapshotFile=…` or `override val snapshotFile` |
 | Migration files | `src/main/resources/aggo/migrations/` | `-Daggo.migrationsDir=…` or `override val migrationsDir` |
 | Version label | _(timestamp only)_ | `-Daggo.name=…` or `args[0]` |
 
@@ -247,6 +247,11 @@ Review the plan before applying it:
 ```kotlin
 plan.steps.forEach { step ->
     println("${step.change}: ${step.sql ?: "manual"}")
+    step.audit?.let { audit ->
+        println("  ${audit.operation} ${audit.targetType} ${audit.targetName}")
+        println("  reversible=${audit.reversible}")
+        audit.reverseSql?.let { println("  reverse: $it") }
+    }
 }
 ```
 
@@ -303,8 +308,8 @@ CREATE TABLE IF NOT EXISTS "aggo_schema_versions" (
 
 If a plan contains manual steps, Aggo refuses it before running any SQL. Manual
 steps are emitted for destructive or ambiguous changes, including dropped
-tables, dropped columns, type changes, changed CHECK expressions, and primary-key
-rewrites.
+tables, dropped columns, type changes, changed constraints, primary-key rewrites,
+custom-type changes, and index rewrites.
 
 ## Diffing schema versions
 
@@ -333,10 +338,17 @@ ALTER TABLE "users" ADD COLUMN "nickname" TEXT;
 ALTER TABLE "users" ALTER COLUMN "deleted_at" DROP NOT NULL;
 ```
 
+Each `MigrationStep` carries `audit` metadata with operation, target type,
+target name, reversibility, and reverse SQL when Aggo can render it safely. The
+generated SQL file also includes `-- aggo:change`, `-- aggo:audit`, and
+`-- aggo:reverse` comments before each generated statement so code review can
+audit exactly what changed.
+
 Risky changes are tracked as `requiresManualMigration = true` so you can write a
 domain-aware migration with backfill, locking, compatibility, and rollback
-rules. This includes new `NOT NULL` columns and nullable-to-not-null changes,
-because existing rows may need a default or backfill.
+rules. This includes new `NOT NULL` columns, nullable-to-not-null changes,
+column drops, column type changes, changed constraints, primary-key rewrites,
+custom-type changes, and index rewrites.
 
 ## Standalone SQL generation
 

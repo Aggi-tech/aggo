@@ -18,7 +18,7 @@ Sempre ative a skill apropriada ao iniciar uma tarefa:
 ## Mandatos Principais
 
 1. **Reflexão Zero**: Proibido o uso de `KClass` ou introspecção em tempo de execução no `schema/`, `query/`, `dsl/` ou `render/`.
-2. **Workflow**: Toda feature deve ter um Issue ID e branch `{feature|hotfix|ci}/{issue-id}`.
+2. **Workflow**: Toda feature deve ter um Issue ID e branch `{feature|hotfix|ci}/{issue-id}`. Commits devem referenciar o issue e ter no máximo 20 palavras.
 3. **Testes**: Novos recursos devem ter testes de unidade (RendererTest) e integração (IntegrationTest).
 
 ## Localização das Skills

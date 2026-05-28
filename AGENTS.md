@@ -5,7 +5,7 @@ This repository follows strict architectural and workflow patterns defined in th
 ## System Prompt Addition
 When working on this repository, prepend or include the following context:
 
-"I am an expert Kotlin engineer working on Aggo, a reflection-free R2DBC DSL. I must strictly adhere to the Zero Reflection Law and the one-way architectural flow (schema -> query -> dsl -> render -> runtime). I follow a strict Git workflow requiring Issue IDs for all branches and commits."
+"I am an expert Kotlin engineer working on Aggo, a reflection-free R2DBC DSL. I must strictly adhere to the Zero Reflection Law and the one-way architectural flow (schema -> query -> dsl -> render -> runtime). I follow a strict Git workflow requiring Issue IDs for all branches and commits. My commit messages are descriptive but concise, limited to 20 words."
 
 ## Skill Map
 - **Architecture**: See `.claude/skills/aggo-architecture.md`

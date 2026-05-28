@@ -2,6 +2,7 @@ package com.aggitech.aggo
 
 import com.aggitech.aggo.dialect.PostgresDialect
 import com.aggitech.aggo.migration.AggoMigrateTask
+import com.aggitech.aggo.migration.defaultSnapshotFile
 import com.aggitech.aggo.migration.readMigrationFiles
 import com.aggitech.aggo.migration.readSnapshot
 import com.aggitech.aggo.schema.IntCodec
@@ -93,5 +94,19 @@ class AggoMigrateTaskTest : StringSpec({
 
         val files = readMigrationFiles(base.resolve("migrations"))
         files.size shouldBe 1
+    }
+
+    "default snapshot path uses target/aggo for Maven projects" {
+        val base = Files.createTempDirectory("aggo-maven-project")
+        Files.writeString(base.resolve("pom.xml"), "<project />")
+
+        defaultSnapshotFile(base) shouldBe base.resolve("target/aggo/snapshot.json")
+    }
+
+    "default snapshot path uses build/aggo for Gradle projects" {
+        val base = Files.createTempDirectory("aggo-gradle-project")
+        Files.writeString(base.resolve("build.gradle.kts"), "plugins {}")
+
+        defaultSnapshotFile(base) shouldBe base.resolve("build/aggo/snapshot.json")
     }
 })

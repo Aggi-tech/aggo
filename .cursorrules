@@ -7,7 +7,7 @@ You are working on Aggo, a reflection-free, type-safe R2DBC DSL for PostgreSQL i
 - **Workflow**: 
   - Every feature/bugfix MUST have an Issue ID.
   - Branch naming: `{feature|hotfix|ci}/{issue-id}`.
-  - Reference the Issue ID in commit messages.
+  - Reference the Issue ID in commit messages (max 20 words).
 - **Package Boundaries**: 
   - `schema/` -> `dsl/` -> `query/` (AST) -> `render/` -> `runtime/`.
   - No backward dependencies. Renderers never touch the database.

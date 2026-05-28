@@ -21,7 +21,7 @@ private val VALID_MIGRATION_NAME = Regex("^[A-Za-z0-9_-]+$")
  *     AggoMigrate.generate(
  *         tables       = listOf(UsersTable, OrdersTable),
  *         dialect      = PostgresDialect,
- *         snapshotFile = Paths.get("src/main/resources/aggo/snapshot.json"),
+ *         snapshotFile = Paths.get("target/aggo/snapshot.json"), // Maven
  *         migrationsDir = Paths.get("src/main/resources/aggo/migrations"),
  *         migrationName = "add_orders_table",   // optional label
  *     )
@@ -44,7 +44,8 @@ private val VALID_MIGRATION_NAME = Regex("^[A-Za-z0-9_-]+$")
  *
  * Steps that require manual SQL (e.g. adding a NOT NULL column with a default,
  * changing a column type) are printed to stdout as warnings. The generated file
- * only contains the safe auto-SQL; manual steps must be added by the developer.
+ * contains audit comments plus safe auto-SQL; manual steps must be added by the
+ * developer.
  */
 object AggoMigrate {
 
@@ -81,11 +82,12 @@ object AggoMigrate {
             manualSteps.forEach { println("  - ${it.change}") }
         }
 
-        val sqlBody = plan.sql()
-        if (sqlBody.isBlank()) {
+        val autoSqlBody = plan.sql()
+        if (autoSqlBody.isBlank()) {
             println("No auto-SQL to generate (all ${plan.steps.size} changes require manual migration).")
             return
         }
+        val sqlBody = plan.toAuditedSql()
 
         val generatedAt = Instant.now()
         val checksum = computeChecksum(sqlBody, generatedAt)
@@ -105,6 +107,25 @@ object AggoMigrate {
         println("Generated: $newVersion ($autoCount auto, ${manualSteps.size} manual) → $file")
     }
 }
+
+private fun MigrationPlan.toAuditedSql(): String =
+    steps.joinToString("\n\n") { step ->
+        buildString {
+            appendLine("-- aggo:change=${step.change}")
+            step.audit?.let { audit ->
+                appendLine(
+                    "-- aggo:audit=${audit.operation} ${audit.targetType} ${audit.targetName} " +
+                        "reversible=${audit.reversible}"
+                )
+                audit.reverseSql?.let { appendLine("-- aggo:reverse=$it") }
+                audit.note?.let { appendLine("-- aggo:note=$it") }
+            }
+            if (step.requiresManualMigration) {
+                appendLine("-- aggo:manual=true")
+            }
+            step.sql?.let { append(it) }
+        }.trimEnd()
+    }
 
 private fun generateVersion(name: String?): String {
     val ts = LocalDateTime.now(ZoneId.systemDefault()).format(VERSION_FORMAT)

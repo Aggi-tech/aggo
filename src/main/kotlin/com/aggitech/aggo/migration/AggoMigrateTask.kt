@@ -3,6 +3,8 @@ package com.aggitech.aggo.migration
 import com.aggitech.aggo.dialect.MigrationDialect
 import com.aggitech.aggo.runtime.PostgresConfig
 import com.aggitech.aggo.schema.Table
+import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.file.Paths
 
 /**
@@ -64,7 +66,7 @@ import java.nio.file.Paths
  *
  * | System property       | Default                                          |
  * |-----------------------|--------------------------------------------------|
- * | `aggo.snapshotFile`   | `src/main/resources/aggo/snapshot.json`          |
+ * | `aggo.snapshotFile`   | `target/aggo/snapshot.json` for Maven, `build/aggo/snapshot.json` for Gradle |
  * | `aggo.migrationsDir`  | `src/main/resources/aggo/migrations`             |
  * | `aggo.name`           | _(none — timestamp-only version label)_          |
  *
@@ -93,7 +95,7 @@ abstract class AggoMigrateTask {
 
     open val snapshotFile
         get() = Paths.get(
-            System.getProperty("aggo.snapshotFile", "src/main/resources/aggo/snapshot.json")
+            System.getProperty("aggo.snapshotFile") ?: defaultSnapshotFile().toString()
         )
 
     open val migrationsDir
@@ -135,4 +137,27 @@ abstract class AggoMigrateTask {
     fun runFromArgs(args: Array<String>) {
         MigrationCli.dispatch(this, args)
     }
+}
+
+/**
+ * Resolves Aggo's generated schema snapshot path for the current build tool.
+ *
+ * Maven projects use `target/aggo/snapshot.json`; Gradle projects use
+ * `build/aggo/snapshot.json`. If both build descriptors are present, Maven wins
+ * because this task is Maven-oriented by default and Gradle users can still
+ * override [AggoMigrateTask.snapshotFile] or `-Daggo.snapshotFile`.
+ */
+fun defaultSnapshotFile(projectDir: Path = Paths.get("").toAbsolutePath()): Path {
+    val isMaven = Files.exists(projectDir.resolve("pom.xml"))
+    val isGradle = Files.exists(projectDir.resolve("build.gradle.kts")) ||
+        Files.exists(projectDir.resolve("build.gradle")) ||
+        Files.exists(projectDir.resolve("settings.gradle.kts")) ||
+        Files.exists(projectDir.resolve("settings.gradle"))
+
+    val buildDir = when {
+        isMaven -> "target"
+        isGradle -> "build"
+        else -> "target"
+    }
+    return projectDir.resolve(buildDir).resolve("aggo").resolve("snapshot.json")
 }

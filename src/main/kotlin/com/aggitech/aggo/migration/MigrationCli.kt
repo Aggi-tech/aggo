@@ -111,7 +111,7 @@ internal object MigrationCli {
             return
         }
         withAggo(task) { aggo ->
-            val results = runBlocking { aggo.applyMigrations(task.migrationsDir) }
+            val results = runBlocking { aggo.tx.applyMigrations(task.migrationsDir) }
             val executed = results.filter { !it.skipped }
             val skipped = results.count { it.skipped }
             for (r in executed) {
@@ -152,12 +152,12 @@ internal object MigrationCli {
 
         withAggo(task) { aggo ->
             runBlocking {
-                aggo.tx {
+                aggo.tx.unsafe { raw ->
                     for (table in task.tables.reversed()) {
                         // Reversed so FK-children drop before parents in the common case.
-                        executeRaw(table.dropTableSql(task.dialect, ifExists = true))
+                        raw.executeRaw(table.dropTableSql(task.dialect, ifExists = true))
                     }
-                    executeRaw("DROP TABLE IF EXISTS \"aggo_schema_versions\";")
+                    raw.executeRaw("DROP TABLE IF EXISTS \"aggo_schema_versions\";")
                 }
             }
         }
@@ -217,12 +217,12 @@ internal object MigrationCli {
     }
 
     @OptIn(AggoUnsafe::class)
-    private suspend fun fetchAppliedVersions(aggo: Aggo): Set<String> = aggo.read {
+    private suspend fun fetchAppliedVersions(aggo: Aggo): Set<String> = aggo.tx.unsafe { raw ->
         // The schema-versions table may not exist yet on a fresh DB; treat any
         // failure as "nothing applied" so `status` works on an uninitialised DB.
         runCatching {
             val versions = mutableSetOf<String>()
-            val statement = rawConnection().createStatement(
+            val statement = raw.rawConnection().createStatement(
                 "SELECT \"version\" FROM \"aggo_schema_versions\" ORDER BY \"version\";",
             )
             @Suppress("UNCHECKED_CAST")
@@ -255,4 +255,3 @@ private fun sysOrEnv(systemProperty: String, envVar: String): String? =
 private fun requireSetting(systemProperty: String, envVar: String): String =
     sysOrEnv(systemProperty, envVar)
         ?: error("Database setting not provided. Set -D$systemProperty=… or env $envVar.")
-

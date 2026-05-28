@@ -1,11 +1,14 @@
 package com.aggitech.aggo
 
 import com.aggitech.aggo.dialect.PostgresDialect
+import com.aggitech.aggo.migration.MigrationCheck
 import com.aggitech.aggo.migration.MigrationColumn
 import com.aggitech.aggo.migration.MigrationCustomType
+import com.aggitech.aggo.migration.MigrationForeignKey
 import com.aggitech.aggo.migration.MigrationIndex
 import com.aggitech.aggo.migration.MigrationSchema
 import com.aggitech.aggo.migration.MigrationTable
+import com.aggitech.aggo.migration.MigrationUnique
 import com.aggitech.aggo.migration.addIndexesSql
 import com.aggitech.aggo.migration.createTableSql
 import com.aggitech.aggo.migration.dropTableSql
@@ -477,5 +480,106 @@ class MigrationGeneratorTest : StringSpec({
         plan.steps.size shouldBe 1
         plan.steps[0].change shouldBe "change index articles.idx_articles_title"
         plan.steps[0].requiresManualMigration shouldBe true
+    }
+
+    "migrationPlan diff records audit metadata and reverse SQL for safe column and check changes" {
+        val previous = MigrationSchema(
+            "v1",
+            listOf(MigrationTable(
+                name = "users",
+                columns = listOf(MigrationColumn("id", "INTEGER", nullable = false)),
+                primaryKey = listOf("id"),
+            )),
+        )
+        val current = MigrationSchema(
+            "v2",
+            listOf(MigrationTable(
+                name = "users",
+                columns = listOf(
+                    MigrationColumn("id", "INTEGER", nullable = false),
+                    MigrationColumn("nickname", "TEXT", nullable = true),
+                ),
+                checks = listOf(MigrationCheck("chk_users_nickname", "char_length(\"nickname\") <= 64")),
+                primaryKey = listOf("id"),
+            )),
+        )
+
+        val plan = migrationPlan(current, PostgresDialect, previous = previous)
+
+        val addColumn = plan.steps.first { it.change == "add column users.nickname" }
+        addColumn.audit!!.operation shouldBe "add"
+        addColumn.audit!!.targetType shouldBe "column"
+        addColumn.audit!!.targetName shouldBe "users.nickname"
+        addColumn.audit!!.reversible shouldBe true
+        addColumn.audit!!.reverseSql shouldBe """ALTER TABLE "users" DROP COLUMN "nickname";"""
+
+        val addCheck = plan.steps.first { it.change == "add check users.chk_users_nickname" }
+        addCheck.audit!!.operation shouldBe "add"
+        addCheck.audit!!.targetType shouldBe "check"
+        addCheck.audit!!.targetName shouldBe "users.chk_users_nickname"
+        addCheck.audit!!.reversible shouldBe true
+        addCheck.audit!!.reverseSql shouldBe """ALTER TABLE "users" DROP CONSTRAINT "chk_users_nickname";"""
+    }
+
+    "migrationPlan diff emits reversible SQL for dropped check, unique, and foreign key constraints" {
+        val previous = MigrationSchema(
+            "v1",
+            listOf(
+                MigrationTable("accounts", listOf(MigrationColumn("id", "INTEGER", nullable = false)), primaryKey = listOf("id")),
+                MigrationTable(
+                    name = "users",
+                    columns = listOf(
+                        MigrationColumn("id", "INTEGER", nullable = false),
+                        MigrationColumn("account_id", "INTEGER", nullable = false),
+                        MigrationColumn("email", "TEXT", nullable = false),
+                    ),
+                    checks = listOf(MigrationCheck("chk_users_email", "trim(\"email\") <> ''")),
+                    uniques = listOf(MigrationUnique("uq_users_email", listOf("email"))),
+                    primaryKey = listOf("id"),
+                    foreignKeys = listOf(
+                        MigrationForeignKey(
+                            name = "fk_users_account_id",
+                            column = "account_id",
+                            referencedTable = "accounts",
+                            referencedColumn = "id",
+                            onDelete = "CASCADE",
+                            onUpdate = "RESTRICT",
+                        )
+                    ),
+                ),
+            ),
+        )
+        val current = MigrationSchema(
+            "v2",
+            listOf(
+                MigrationTable("accounts", listOf(MigrationColumn("id", "INTEGER", nullable = false)), primaryKey = listOf("id")),
+                MigrationTable(
+                    name = "users",
+                    columns = listOf(
+                        MigrationColumn("id", "INTEGER", nullable = false),
+                        MigrationColumn("account_id", "INTEGER", nullable = false),
+                        MigrationColumn("email", "TEXT", nullable = false),
+                    ),
+                    primaryKey = listOf("id"),
+                ),
+            ),
+        )
+
+        val plan = migrationPlan(current, PostgresDialect, previous = previous)
+
+        val dropCheck = plan.steps.first { it.change == "drop check users.chk_users_email" }
+        dropCheck.sql shouldBe """ALTER TABLE "users" DROP CONSTRAINT "chk_users_email";"""
+        dropCheck.audit!!.reversible shouldBe true
+        dropCheck.audit!!.reverseSql shouldBe """ALTER TABLE "users" ADD CONSTRAINT "chk_users_email" CHECK (trim("email") <> '');"""
+
+        val dropUnique = plan.steps.first { it.change == "drop unique users.uq_users_email" }
+        dropUnique.sql shouldBe """ALTER TABLE "users" DROP CONSTRAINT "uq_users_email";"""
+        dropUnique.audit!!.reversible shouldBe true
+        dropUnique.audit!!.reverseSql shouldBe """ALTER TABLE "users" ADD CONSTRAINT "uq_users_email" UNIQUE ("email");"""
+
+        val dropFk = plan.steps.first { it.change == "drop foreign key users.fk_users_account_id" }
+        dropFk.sql shouldBe """ALTER TABLE "users" DROP CONSTRAINT "fk_users_account_id";"""
+        dropFk.audit!!.reversible shouldBe true
+        dropFk.audit!!.reverseSql shouldBe """ALTER TABLE "users" ADD CONSTRAINT "fk_users_account_id" FOREIGN KEY ("account_id") REFERENCES "accounts" ("id") ON DELETE CASCADE ON UPDATE RESTRICT;"""
     }
 })

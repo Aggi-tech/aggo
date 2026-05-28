@@ -77,7 +77,7 @@ import org.reactivestreams.Publisher
 class Session internal constructor(
     private val connection: Connection,
     private val dialect: SqlDialect,
-) {
+) : TransactionScope {
 
     // ----- SELECT ---------------------------------------------------------
 
@@ -93,22 +93,22 @@ class Session internal constructor(
      * }
      * ```
      */
-    suspend fun <E> fetchAll(query: Select<E>): List<E> =
+    override suspend fun <E> fetchAll(query: Select<E>): List<E> =
         stream(query).toList()
 
     /** Typed-result form of [fetchAll]. Database failures are returned as [Query.Failure]. */
-    suspend fun <E> fetchAll(query: Select<E>, errorMap: ConstraintErrorMap): Query<List<E>, AggoError> =
+    override suspend fun <E> fetchAll(query: Select<E>, errorMap: ConstraintErrorMap): Query<List<E>, AggoError> =
         capture(errorMap) { fetchAll(query) }
 
     /** Builder-block form of [fetchAll]. */
-    suspend fun <E> fetchAll(table: Table<E>, block: SelectBuilder<E>.() -> Unit = {}): List<E> =
+    override suspend fun <E> fetchAll(table: Table<E>, block: SelectBuilder<E>.() -> Unit): List<E> =
         fetchAll(com.aggitech.aggo.dsl.select(table, block))
 
     /** Builder-block typed-result form of [fetchAll]. */
-    suspend fun <E> fetchAll(
+    override suspend fun <E> fetchAll(
         table: Table<E>,
         errorMap: ConstraintErrorMap,
-        block: SelectBuilder<E>.() -> Unit = {},
+        block: SelectBuilder<E>.() -> Unit,
     ): Query<List<E>, AggoError> =
         fetchAll(com.aggitech.aggo.dsl.select(table, block), errorMap)
 
@@ -118,7 +118,7 @@ class Session internal constructor(
      * Returns `(entities, count, totalPages)`. The count query reuses the same
      * filter as [query] and ignores ordering, limit, and offset.
      */
-    suspend fun <E> paginate(query: Select<E>, page: Int, size: Int): Triple<List<E>, Long, Int> {
+    override suspend fun <E> paginate(query: Select<E>, page: Int, size: Int): Triple<List<E>, Long, Int> {
         validatePage(page, size)
         val offset = pageOffset(page, size)
         val count = count(query)
@@ -127,7 +127,7 @@ class Session internal constructor(
     }
 
     /** Typed-result form of [paginate]. */
-    suspend fun <E> paginate(
+    override suspend fun <E> paginate(
         query: Select<E>,
         page: Int,
         size: Int,
@@ -136,21 +136,21 @@ class Session internal constructor(
         capture(errorMap) { paginate(query, page, size) }
 
     /** Builder-block form of [paginate]. */
-    suspend fun <E> paginate(
+    override suspend fun <E> paginate(
         table: Table<E>,
         page: Int,
         size: Int,
-        block: SelectBuilder<E>.() -> Unit = {},
+        block: SelectBuilder<E>.() -> Unit,
     ): Triple<List<E>, Long, Int> =
         paginate(com.aggitech.aggo.dsl.select(table, block), page, size)
 
     /** Builder-block typed-result form of [paginate]. */
-    suspend fun <E> paginate(
+    override suspend fun <E> paginate(
         table: Table<E>,
         page: Int,
         size: Int,
         errorMap: ConstraintErrorMap,
-        block: SelectBuilder<E>.() -> Unit = {},
+        block: SelectBuilder<E>.() -> Unit,
     ): Query<Triple<List<E>, Long, Int>, AggoError> =
         paginate(com.aggitech.aggo.dsl.select(table, block), page, size, errorMap)
 
@@ -162,7 +162,7 @@ class Session internal constructor(
      * val user = fetchOne(UsersTable) { where { UsersTable.email eq email } }
      * ```
      */
-    suspend fun <E> fetchOne(query: Select<E>): E? =
+    override suspend fun <E> fetchOne(query: Select<E>): E? =
         flow {
             val rendered = renderSelect(query, dialect, limitOverride = 1)
             val table = query.table
@@ -173,7 +173,7 @@ class Session internal constructor(
         }.toList().firstOrNull()
 
     /** Builder-block form of [fetchOne]. Returns `null` when no row matches. */
-    suspend fun <E> fetchOne(table: Table<E>, block: SelectBuilder<E>.() -> Unit = {}): E? =
+    override suspend fun <E> fetchOne(table: Table<E>, block: SelectBuilder<E>.() -> Unit): E? =
         fetchOne(com.aggitech.aggo.dsl.select(table, block))
 
     /**
@@ -189,7 +189,7 @@ class Session internal constructor(
      * The flow must be collected inside the same [Aggo.read] or [Aggo.tx] block
      * that produced it — the underlying connection is released when the block ends.
      */
-    fun <E> stream(query: Select<E>): Flow<E> = flow {
+    override fun <E> stream(query: Select<E>): Flow<E> = flow {
         val rendered = renderSelect(query, dialect)
         val table = query.table
         executeForResults(rendered).asResultFlow().collect { result ->
@@ -201,7 +201,7 @@ class Session internal constructor(
     }
 
     /** Builder-block form of [stream]. */
-    fun <E> stream(table: Table<E>, block: SelectBuilder<E>.() -> Unit = {}): Flow<E> =
+    override fun <E> stream(table: Table<E>, block: SelectBuilder<E>.() -> Unit): Flow<E> =
         stream(com.aggitech.aggo.dsl.select(table, block))
 
     private suspend fun count(query: Select<*>): Long {
@@ -256,11 +256,11 @@ class Session internal constructor(
      * rows.forEach { (order, user) -> println("${order.id} placed by ${user?.name}") }
      * ```
      */
-    suspend fun <L, R> fetchAllJoined(query: JoinSelect<L, R>): List<JoinedRow<L, R>> =
+    override suspend fun <L, R> fetchAllJoined(query: JoinSelect<L, R>): List<JoinedRow<L, R>> =
         streamJoined(query).toList()
 
     /** Streaming form of [fetchAllJoined]. Right side of each row is `null` on no-match. */
-    fun <L, R> streamJoined(query: JoinSelect<L, R>): Flow<JoinedRow<L, R>> = flow {
+    override fun <L, R> streamJoined(query: JoinSelect<L, R>): Flow<JoinedRow<L, R>> = flow {
         val rendered = renderJoinSelect(query, dialect)
         executeForResults(rendered).asResultFlow().collect { result ->
             val mapped: Publisher<JoinedRow<L, R>> = result.map { row, _ -> mapJoinedRow(query, row) }
@@ -289,21 +289,21 @@ class Session internal constructor(
      * }
      * ```
      */
-    suspend fun <E> fetchProjection(query: ProjectionSelect<E>): List<ProjectedRow> =
+    override suspend fun <E> fetchProjection(query: ProjectionSelect<E>): List<ProjectedRow> =
         streamProjection(query).toList()
 
     /** Inline form of [fetchProjection] — columns and optional block in one call. */
-    suspend fun <E> fetchProjection(
+    override suspend fun <E> fetchProjection(
         table: Table<E>,
         vararg columns: Column<E, *>,
-        block: ProjectionSelectBuilder<E>.() -> Unit = {},
+        block: ProjectionSelectBuilder<E>.() -> Unit,
     ): List<ProjectedRow> = fetchProjection(selectProjection(table, *columns, block = block))
 
     /**
      * Fetches the first projected row, or `null` if none matches.
      * Always sends `LIMIT 1` to the database.
      */
-    suspend fun <E> fetchOneProjection(query: ProjectionSelect<E>): ProjectedRow? =
+    override suspend fun <E> fetchOneProjection(query: ProjectionSelect<E>): ProjectedRow? =
         flow {
             val rendered = renderProjectionSelect(query, dialect, limitOverride = 1)
             executeForResults(rendered).asResultFlow().collect { result ->
@@ -313,10 +313,10 @@ class Session internal constructor(
         }.toList().firstOrNull()
 
     /** Inline form of [fetchOneProjection]. */
-    suspend fun <E> fetchOneProjection(
+    override suspend fun <E> fetchOneProjection(
         table: Table<E>,
         vararg columns: Column<E, *>,
-        block: ProjectionSelectBuilder<E>.() -> Unit = {},
+        block: ProjectionSelectBuilder<E>.() -> Unit,
     ): ProjectedRow? = fetchOneProjection(selectProjection(table, *columns, block = block))
 
     /**
@@ -325,7 +325,7 @@ class Session internal constructor(
      *
      * The flow must be collected inside the same [Aggo.read] or [Aggo.tx] block.
      */
-    fun <E> streamProjection(query: ProjectionSelect<E>): Flow<ProjectedRow> = flow {
+    override fun <E> streamProjection(query: ProjectionSelect<E>): Flow<ProjectedRow> = flow {
         val rendered = renderProjectionSelect(query, dialect)
         executeForResults(rendered).asResultFlow().collect { result ->
             val mapped: Publisher<ProjectedRow> = result.map { row, _ -> ProjectedRow(row) }
@@ -334,10 +334,10 @@ class Session internal constructor(
     }
 
     /** Inline form of [streamProjection]. */
-    fun <E> streamProjection(
+    override fun <E> streamProjection(
         table: Table<E>,
         vararg columns: Column<E, *>,
-        block: ProjectionSelectBuilder<E>.() -> Unit = {},
+        block: ProjectionSelectBuilder<E>.() -> Unit,
     ): Flow<ProjectedRow> = streamProjection(selectProjection(table, *columns, block = block))
 
     // ----- AGGREGATE SELECT -----------------------------------------------
@@ -365,11 +365,11 @@ class Session internal constructor(
      * results.map { row -> row[total]!! to row[avg]!! }
      * ```
      */
-    suspend fun <E> fetchAggregate(query: AggregateSelect<E>): List<AggRow> =
+    override suspend fun <E> fetchAggregate(query: AggregateSelect<E>): List<AggRow> =
         streamAggregate(query).toList()
 
     /** Builder-block form of [fetchAggregate]. */
-    suspend fun <E> fetchAggregate(
+    override suspend fun <E> fetchAggregate(
         table: Table<E>,
         block: AggregateBuilder<E>.() -> Unit,
     ): List<AggRow> = fetchAggregate(aggregate(table, block))
@@ -380,7 +380,7 @@ class Session internal constructor(
      *
      * The flow must be collected inside the same [Aggo.read] or [Aggo.tx] block.
      */
-    fun <E> streamAggregate(query: AggregateSelect<E>): Flow<AggRow> = flow {
+    override fun <E> streamAggregate(query: AggregateSelect<E>): Flow<AggRow> = flow {
         val rendered = renderAggregateSelect(query, dialect)
         executeForResults(rendered).asResultFlow().collect { result ->
             val mapped: Publisher<AggRow> = result.map { row, _ -> AggRow(row, query.projections) }
@@ -389,7 +389,7 @@ class Session internal constructor(
     }
 
     /** Builder-block form of [streamAggregate]. */
-    fun <E> streamAggregate(
+    override fun <E> streamAggregate(
         table: Table<E>,
         block: AggregateBuilder<E>.() -> Unit,
     ): Flow<AggRow> = streamAggregate(aggregate(table, block))
@@ -397,7 +397,7 @@ class Session internal constructor(
     // ----- INSERT ---------------------------------------------------------
 
     /** Execute a pre-built [Insert] query. Returns the number of rows affected. */
-    suspend fun <E> insert(query: Insert<E>): Long =
+    override suspend fun <E> insert(query: Insert<E>): Long =
         executeUpdate(renderInsert(query, dialect).asRenderedSql())
 
     /**
@@ -409,7 +409,7 @@ class Session internal constructor(
      * aggo.tx { insert(UsersTable, user) }
      * ```
      */
-    suspend fun <E> insert(table: Table<E>, entity: E): Long =
+    override suspend fun <E> insert(table: Table<E>, entity: E): Long =
         insert(com.aggitech.aggo.dsl.insert(table, entity))
 
     /**
@@ -425,7 +425,7 @@ class Session internal constructor(
      * }
      * ```
      */
-    suspend fun <E> insert(table: Table<E>, block: InsertBuilder<E>.() -> Unit): Long =
+    override suspend fun <E> insert(table: Table<E>, block: InsertBuilder<E>.() -> Unit): Long =
         insert(com.aggitech.aggo.dsl.insert(table, block))
 
     /**
@@ -440,7 +440,7 @@ class Session internal constructor(
      * }
      * ```
      */
-    suspend fun <E, V> insertReturning(query: Insert<E>, pkColumn: Column<E, V>): V? {
+    override suspend fun <E, V> insertReturning(query: Insert<E>, pkColumn: Column<E, V>): V? {
         val rendered = renderInsert(query, dialect, returningPk = true)
         return when (val strategy = rendered.returnStrategy) {
             null -> null
@@ -508,7 +508,7 @@ class Session internal constructor(
             Bound(assignment.value, assignment.codec, assignment.column)
         }
 
-    suspend fun <E, V> insertReturning(
+    override suspend fun <E, V> insertReturning(
         table: Table<E>,
         pkColumn: Column<E, V>,
         block: InsertBuilder<E>.() -> Unit,
@@ -517,7 +517,7 @@ class Session internal constructor(
     // ----- UPDATE / DELETE -----------------------------------------------
 
     /** Execute a pre-built [Update] query. Returns the number of rows affected. */
-    suspend fun <E> update(query: Update<E>): Long = executeUpdate(renderUpdate(query, dialect))
+    override suspend fun <E> update(query: Update<E>): Long = executeUpdate(renderUpdate(query, dialect))
 
     /**
      * Update columns for rows matching the WHERE clause. Returns the number of rows affected.
@@ -531,11 +531,11 @@ class Session internal constructor(
      * check(affected == 1L) { "user $userId not found" }
      * ```
      */
-    suspend fun <E> update(table: Table<E>, block: UpdateBuilder<E>.() -> Unit): Long =
+    override suspend fun <E> update(table: Table<E>, block: UpdateBuilder<E>.() -> Unit): Long =
         update(com.aggitech.aggo.dsl.update(table, block))
 
     /** Execute a pre-built [Delete] query. Returns the number of rows deleted. */
-    suspend fun <E> delete(query: Delete<E>): Long = executeUpdate(renderDelete(query, dialect))
+    override suspend fun <E> delete(query: Delete<E>): Long = executeUpdate(renderDelete(query, dialect))
 
     /**
      * Delete rows matching the WHERE clause. Returns the number of rows deleted.
@@ -545,7 +545,7 @@ class Session internal constructor(
      * delete(UsersTable) { where { UsersTable.id eq userId } }
      * ```
      */
-    suspend fun <E> delete(table: Table<E>, block: DeleteBuilder<E>.() -> Unit = {}): Long =
+    override suspend fun <E> delete(table: Table<E>, block: DeleteBuilder<E>.() -> Unit): Long =
         delete(com.aggitech.aggo.dsl.delete(table, block))
 
     // ----- migrations -----------------------------------------------------
@@ -557,7 +557,7 @@ class Session internal constructor(
      * so schema changes and version recording commit atomically. Steps marked
      * [MigrationStep.requiresManualMigration] are refused before any SQL runs.
      */
-    suspend fun applyMigration(plan: MigrationPlan): MigrationResult {
+    override suspend fun applyMigration(plan: MigrationPlan): MigrationResult {
         val manualSteps = plan.steps.filter { it.requiresManualMigration }
         require(manualSteps.isEmpty()) {
             "migration ${plan.fromVersion ?: "<empty>"} -> ${plan.toVersion} has manual steps: " +
@@ -612,7 +612,7 @@ class Session internal constructor(
      * Call this inside [Aggo.tx] (or use [Aggo.applyMigrations]) so all DDL
      * and version records commit atomically.
      */
-    suspend fun applyMigrations(entries: List<MigrationFileEntry>): List<MigrationResult> {
+    override suspend fun applyMigrations(entries: List<MigrationFileEntry>): List<MigrationResult> {
         ensureVersionTable()
         val versionTable = dialect.qualifyTableName(VERSION_TABLE)
         val results = mutableListOf<MigrationResult>()

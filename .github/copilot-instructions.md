@@ -8,6 +8,7 @@
 ## Workflow
 - Always ask for an Issue ID before starting a new feature or fix.
 - Suggest branch names in the format: `{feature|hotfix|ci}/{issue-id}`.
+- Commit messages must be descriptive, reference the Issue ID, and be limited to 20 words.
 
 ## Code Style
 - Use Kotlin idiomatic DSL patterns.

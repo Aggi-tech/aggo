@@ -136,4 +136,17 @@ class AggoMigrateTest : StringSpec({
         AggoMigrate.generate(listOf(SampleTableA), PostgresDialect, snapshotFile, migrationsDir)
         readSnapshot(snapshotFile) shouldNotBe null
     }
+
+    "generate writes audit comments before generated SQL statements" {
+        val (snapshotDir, migrationsDir) = tempDirs()
+        val snapshotFile = snapshotDir.resolve("snapshot.json")
+
+        AggoMigrate.generate(listOf(SampleTableA), PostgresDialect, snapshotFile, migrationsDir)
+
+        val file = readMigrationFiles(migrationsDir).single()
+        file.sql shouldContain "-- aggo:change=create table sample_a"
+        file.sql shouldContain "-- aggo:audit=create table sample_a reversible=true"
+        file.sql shouldContain "-- aggo:reverse=DROP TABLE IF EXISTS \"sample_a\";"
+        file.sql shouldContain "CREATE TABLE IF NOT EXISTS \"sample_a\""
+    }
 })

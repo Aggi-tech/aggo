@@ -138,11 +138,22 @@ data class MigrationForeignKey(
     val onUpdate: String,
 )
 
+/** Reviewable metadata for one migration step. */
+data class MigrationAudit(
+    val operation: String,
+    val targetType: String,
+    val targetName: String,
+    val reversible: Boolean,
+    val reverseSql: String? = null,
+    val note: String? = null,
+)
+
 /** One migration statement plus a stable change note for review/versioning. */
 data class MigrationStep(
     val change: String,
     val sql: String? = null,
     val requiresManualMigration: Boolean = false,
+    val audit: MigrationAudit? = null,
 )
 
 /** Complete versioned migration plan, detached from Aggo runtime descriptors. */
@@ -272,6 +283,12 @@ fun migrationPlan(
             MigrationStep(
                 change = "create table ${table.name}",
                 sql = table.createTableSql(dialect, ifNotExists = ifNotExists),
+                audit = audit(
+                    operation = "create",
+                    targetType = "table",
+                    targetName = table.name,
+                    reverseSql = table.dropTableSql(dialect, ifExists = true),
+                ),
             )
         }
         // FK constraints come after all CREATE TABLE steps to avoid forward-reference issues.
@@ -280,6 +297,12 @@ fun migrationPlan(
                 MigrationStep(
                     change = "add foreign key ${table.name}.${fk.name}",
                     sql = buildFkAlterTable(table.name, fk, dialect),
+                    audit = audit(
+                        operation = "add",
+                        targetType = "foreign key",
+                        targetName = "${table.name}.${fk.name}",
+                        reverseSql = dropConstraintSql(table.name, fk.name, dialect),
+                    ),
                 )
             }
         }
@@ -289,6 +312,12 @@ fun migrationPlan(
                 MigrationStep(
                     change = "create index ${table.name}.${idx.name}",
                     sql = buildIndexSql(table.name, idx, dialect),
+                    audit = audit(
+                        operation = "create",
+                        targetType = "index",
+                        targetName = "${table.name}.${idx.name}",
+                        reverseSql = dropIndexSql(idx.name, dialect),
+                    ),
                 )
             }
         }
@@ -437,6 +466,12 @@ private fun diffSchemas(
             steps += MigrationStep(
                 change = "create table ${table.name}",
                 sql = table.createTableSql(dialect, ifNotExists = ifNotExists),
+                audit = audit(
+                    operation = "create",
+                    targetType = "table",
+                    targetName = table.name,
+                    reverseSql = table.dropTableSql(dialect, ifExists = true),
+                ),
             )
         } else {
             steps += diffTable(oldTable, table, dialect)
@@ -448,6 +483,13 @@ private fun diffSchemas(
             steps += MigrationStep(
                 change = "drop table ${table.name}",
                 requiresManualMigration = true,
+                audit = audit(
+                    operation = "drop",
+                    targetType = "table",
+                    targetName = table.name,
+                    reversible = false,
+                    note = "Dropping a table is destructive and must be reviewed manually.",
+                ),
             )
         }
     }
@@ -473,11 +515,24 @@ private fun diffTable(
                         change = "add column ${current.name}.${column.name}",
                         sql = "ALTER TABLE ${dialect.qualifyTableName(current.name)} ADD COLUMN " +
                             "${dialect.quoteIdentifier(column.name)} ${column.sqlType};",
+                        audit = audit(
+                            operation = "add",
+                            targetType = "column",
+                            targetName = "${current.name}.${column.name}",
+                            reverseSql = dropColumnSql(current.name, column.name, dialect),
+                        ),
                     )
                 } else {
                     MigrationStep(
                         change = "add non-null column ${current.name}.${column.name}",
                         requiresManualMigration = true,
+                        audit = audit(
+                            operation = "add",
+                            targetType = "column",
+                            targetName = "${current.name}.${column.name}",
+                            reversible = false,
+                            note = "Adding a NOT NULL column requires a default or backfill strategy.",
+                        ),
                     )
                 }
             }
@@ -485,6 +540,13 @@ private fun diffTable(
                 change = "change column type ${current.name}.${column.name}: " +
                     "${oldColumn.sqlType} -> ${column.sqlType}",
                 requiresManualMigration = true,
+                audit = audit(
+                    operation = "alter",
+                    targetType = "column",
+                    targetName = "${current.name}.${column.name}",
+                    reversible = false,
+                    note = "Column type changes require an explicit USING expression and rollback plan.",
+                ),
             )
             oldColumn.nullable != column.nullable -> steps += MigrationStep(
                 change = "change column nullability ${current.name}.${column.name}: " +
@@ -492,6 +554,14 @@ private fun diffTable(
                     if (column.nullable) "nullable" else "not null",
                 sql = if (column.nullable) dropNotNullSql(current.name, column, dialect) else null,
                 requiresManualMigration = !column.nullable,
+                audit = audit(
+                    operation = "alter",
+                    targetType = "column",
+                    targetName = "${current.name}.${column.name}",
+                    reversible = column.nullable,
+                    reverseSql = if (column.nullable) setNotNullSql(current.name, column, dialect) else null,
+                    note = if (column.nullable) null else "Setting NOT NULL requires data validation before applying.",
+                ),
             )
         }
     }
@@ -501,6 +571,14 @@ private fun diffTable(
             steps += MigrationStep(
                 change = "drop column ${current.name}.${column.name}",
                 requiresManualMigration = true,
+                audit = audit(
+                    operation = "drop",
+                    targetType = "column",
+                    targetName = "${current.name}.${column.name}",
+                    reversible = false,
+                    reverseSql = addColumnSql(current.name, column, dialect),
+                    note = "Dropping a column loses data; reverse SQL can restore shape but not data.",
+                ),
             )
         }
     }
@@ -514,10 +592,23 @@ private fun diffTable(
                 change = "add check ${current.name}.${check.name}",
                 sql = "ALTER TABLE ${dialect.qualifyTableName(current.name)} ADD CONSTRAINT " +
                     "${dialect.quoteIdentifier(check.name)} CHECK (${check.expression});",
+                audit = audit(
+                    operation = "add",
+                    targetType = "check",
+                    targetName = "${current.name}.${check.name}",
+                    reverseSql = dropConstraintSql(current.name, check.name, dialect),
+                ),
             )
             oldCheck.expression != check.expression -> steps += MigrationStep(
                 change = "change check ${current.name}.${check.name}",
                 requiresManualMigration = true,
+                audit = audit(
+                    operation = "alter",
+                    targetType = "check",
+                    targetName = "${current.name}.${check.name}",
+                    reversible = false,
+                    note = "Changing a CHECK constraint may fail against existing data.",
+                ),
             )
         }
     }
@@ -525,7 +616,13 @@ private fun diffTable(
         if (check.name !in currentChecks) {
             steps += MigrationStep(
                 change = "drop check ${current.name}.${check.name}",
-                requiresManualMigration = true,
+                sql = dropConstraintSql(current.name, check.name, dialect),
+                audit = audit(
+                    operation = "drop",
+                    targetType = "check",
+                    targetName = "${current.name}.${check.name}",
+                    reverseSql = buildCheckAlterTable(current.name, check, dialect),
+                ),
             )
         }
     }
@@ -538,10 +635,23 @@ private fun diffTable(
             old == null -> steps += MigrationStep(
                 change = "add unique ${current.name}.${unique.name}",
                 sql = buildUniqueAlterTable(current.name, unique, dialect),
+                audit = audit(
+                    operation = "add",
+                    targetType = "unique",
+                    targetName = "${current.name}.${unique.name}",
+                    reverseSql = dropConstraintSql(current.name, unique.name, dialect),
+                ),
             )
             old != unique -> steps += MigrationStep(
                 change = "change unique ${current.name}.${unique.name}",
                 requiresManualMigration = true,
+                audit = audit(
+                    operation = "alter",
+                    targetType = "unique",
+                    targetName = "${current.name}.${unique.name}",
+                    reversible = false,
+                    note = "Changing a UNIQUE constraint may fail against existing data.",
+                ),
             )
         }
     }
@@ -549,7 +659,13 @@ private fun diffTable(
         if (unique.name !in currentUniques) {
             steps += MigrationStep(
                 change = "drop unique ${current.name}.${unique.name}",
-                requiresManualMigration = true,
+                sql = dropConstraintSql(current.name, unique.name, dialect),
+                audit = audit(
+                    operation = "drop",
+                    targetType = "unique",
+                    targetName = "${current.name}.${unique.name}",
+                    reverseSql = buildUniqueAlterTable(current.name, unique, dialect),
+                ),
             )
         }
     }
@@ -559,6 +675,13 @@ private fun diffTable(
             change = "change primary key ${current.name}: " +
                 "${previous.primaryKey.joinToString(",")} -> ${current.primaryKey.joinToString(",")}",
             requiresManualMigration = true,
+            audit = audit(
+                operation = "alter",
+                targetType = "primary key",
+                targetName = current.name,
+                reversible = false,
+                note = "Primary key rewrites require an explicit migration plan.",
+            ),
         )
     }
 
@@ -570,10 +693,23 @@ private fun diffTable(
             old == null -> steps += MigrationStep(
                 change = "add foreign key ${current.name}.${fk.name}",
                 sql = buildFkAlterTable(current.name, fk, dialect),
+                audit = audit(
+                    operation = "add",
+                    targetType = "foreign key",
+                    targetName = "${current.name}.${fk.name}",
+                    reverseSql = dropConstraintSql(current.name, fk.name, dialect),
+                ),
             )
             old != fk -> steps += MigrationStep(
                 change = "change foreign key ${current.name}.${fk.name}",
                 requiresManualMigration = true,
+                audit = audit(
+                    operation = "alter",
+                    targetType = "foreign key",
+                    targetName = "${current.name}.${fk.name}",
+                    reversible = false,
+                    note = "Changing a FOREIGN KEY can affect referential integrity and requires review.",
+                ),
             )
         }
     }
@@ -581,7 +717,13 @@ private fun diffTable(
         if (fk.name !in currentFks) {
             steps += MigrationStep(
                 change = "drop foreign key ${current.name}.${fk.name}",
-                requiresManualMigration = true,
+                sql = dropConstraintSql(current.name, fk.name, dialect),
+                audit = audit(
+                    operation = "drop",
+                    targetType = "foreign key",
+                    targetName = "${current.name}.${fk.name}",
+                    reverseSql = buildFkAlterTable(current.name, fk, dialect),
+                ),
             )
         }
     }
@@ -594,10 +736,23 @@ private fun diffTable(
             old == null -> steps += MigrationStep(
                 change = "create index ${current.name}.${idx.name}",
                 sql = buildIndexSql(current.name, idx, dialect),
+                audit = audit(
+                    operation = "create",
+                    targetType = "index",
+                    targetName = "${current.name}.${idx.name}",
+                    reverseSql = dropIndexSql(idx.name, dialect),
+                ),
             )
             old != idx -> steps += MigrationStep(
                 change = "change index ${current.name}.${idx.name}",
                 requiresManualMigration = true,
+                audit = audit(
+                    operation = "alter",
+                    targetType = "index",
+                    targetName = "${current.name}.${idx.name}",
+                    reversible = false,
+                    note = "Index rewrites should be planned explicitly for the target database.",
+                ),
             )
         }
     }
@@ -605,7 +760,13 @@ private fun diffTable(
         if (idx.name !in currentIndexes) {
             steps += MigrationStep(
                 change = "drop index ${idx.name}",
-                sql = "DROP INDEX ${dialect.quoteIdentifier(idx.name)};",
+                sql = dropIndexSql(idx.name, dialect),
+                audit = audit(
+                    operation = "drop",
+                    targetType = "index",
+                    targetName = idx.name,
+                    reverseSql = buildIndexSql(current.name, idx, dialect),
+                ),
             )
         }
     }
@@ -616,6 +777,26 @@ private fun diffTable(
 private fun dropNotNullSql(tableName: String, column: MigrationColumn, dialect: MigrationDialect): String =
     "ALTER TABLE ${dialect.qualifyTableName(tableName)} ALTER COLUMN " +
         "${dialect.quoteIdentifier(column.name)} DROP NOT NULL;"
+
+private fun setNotNullSql(tableName: String, column: MigrationColumn, dialect: MigrationDialect): String =
+    "ALTER TABLE ${dialect.qualifyTableName(tableName)} ALTER COLUMN " +
+        "${dialect.quoteIdentifier(column.name)} SET NOT NULL;"
+
+private fun addColumnSql(tableName: String, column: MigrationColumn, dialect: MigrationDialect): String {
+    val nullability = if (column.nullable) "" else " NOT NULL"
+    return "ALTER TABLE ${dialect.qualifyTableName(tableName)} ADD COLUMN " +
+        "${dialect.quoteIdentifier(column.name)} ${column.sqlType}$nullability;"
+}
+
+private fun dropColumnSql(tableName: String, columnName: String, dialect: SqlDialect): String =
+    "ALTER TABLE ${dialect.qualifyTableName(tableName)} DROP COLUMN ${dialect.quoteIdentifier(columnName)};"
+
+private fun dropConstraintSql(tableName: String, constraintName: String, dialect: SqlDialect): String =
+    "ALTER TABLE ${dialect.qualifyTableName(tableName)} DROP CONSTRAINT ${dialect.quoteIdentifier(constraintName)};"
+
+private fun buildCheckAlterTable(tableName: String, check: MigrationCheck, dialect: SqlDialect): String =
+    "ALTER TABLE ${dialect.qualifyTableName(tableName)} ADD CONSTRAINT " +
+        "${dialect.quoteIdentifier(check.name)} CHECK (${check.expression});"
 
 internal fun buildFkAlterTable(tableName: String, fk: MigrationForeignKey, dialect: SqlDialect): String =
     "ALTER TABLE ${dialect.qualifyTableName(tableName)} ADD CONSTRAINT ${dialect.quoteIdentifier(fk.name)} " +
@@ -634,6 +815,25 @@ internal fun buildIndexSql(tableName: String, index: MigrationIndex, dialect: Sq
     return "CREATE INDEX ${dialect.quoteIdentifier(index.name)} " +
         "ON ${dialect.qualifyTableName(tableName)} USING ${index.method} ($cols);"
 }
+
+private fun dropIndexSql(indexName: String, dialect: SqlDialect): String =
+    "DROP INDEX ${dialect.quoteIdentifier(indexName)};"
+
+private fun audit(
+    operation: String,
+    targetType: String,
+    targetName: String,
+    reversible: Boolean = true,
+    reverseSql: String? = null,
+    note: String? = null,
+): MigrationAudit = MigrationAudit(
+    operation = operation,
+    targetType = targetType,
+    targetName = targetName,
+    reversible = reversible,
+    reverseSql = reverseSql,
+    note = note,
+)
 
 /** Returns `CREATE INDEX` statements for all declared indexes on an Aggo table. */
 fun Table<*>.addIndexesSql(dialect: MigrationDialect): List<String> =
@@ -657,10 +857,23 @@ private fun diffCustomTypes(
             old == null -> steps += MigrationStep(
                 change = "create custom type ${type.name}",
                 sql = type.createDdl,
+                audit = audit(
+                    operation = "create",
+                    targetType = "custom type",
+                    targetName = type.name,
+                    reverseSql = "DROP TYPE ${type.name};",
+                ),
             )
             old.createDdl != type.createDdl -> steps += MigrationStep(
                 change = "custom type '${type.name}' DDL changed — review and migrate manually",
                 requiresManualMigration = true,
+                audit = audit(
+                    operation = "alter",
+                    targetType = "custom type",
+                    targetName = type.name,
+                    reversible = false,
+                    note = "Custom type DDL changes are database-specific and require manual SQL.",
+                ),
             )
         }
     }
@@ -670,6 +883,13 @@ private fun diffCustomTypes(
             steps += MigrationStep(
                 change = "custom type '${type.name}' removed — drop manually if safe",
                 requiresManualMigration = true,
+                audit = audit(
+                    operation = "drop",
+                    targetType = "custom type",
+                    targetName = type.name,
+                    reversible = false,
+                    note = "Dropping a custom type can break dependent columns or data.",
+                ),
             )
         }
     }
