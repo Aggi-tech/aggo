@@ -65,15 +65,9 @@ class SelectBuilder<E> internal constructor(val table: Table<E>) {
     }
 
     /** Maximum number of rows to return. Passed as `LIMIT n` to the database. */
-    @Deprecated(
-        message = "Use Session.paginate(..., page, size) for application pagination. Keep limit only for low-level query descriptors.",
-    )
     fun limit(n: Int) { limit = n }
 
     /** Number of rows to skip before returning results. Passed as `OFFSET n`. */
-    @Deprecated(
-        message = "Use Session.paginate(..., page, size) for application pagination. Keep offset only for low-level query descriptors.",
-    )
     fun offset(n: Int) { offset = n }
 
     internal fun build(): Select<E> = Select(table, where, orderBy.toList(), limit, offset)

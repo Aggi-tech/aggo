@@ -508,17 +508,17 @@ class MigrationGeneratorTest : StringSpec({
 
         val addColumn = plan.steps.first { it.change == "add column users.nickname" }
         addColumn.audit!!.operation shouldBe "add"
-        addColumn.audit!!.targetType shouldBe "column"
-        addColumn.audit!!.targetName shouldBe "users.nickname"
-        addColumn.audit!!.reversible shouldBe true
-        addColumn.audit!!.reverseSql shouldBe """ALTER TABLE "users" DROP COLUMN "nickname";"""
+        addColumn.audit.targetType shouldBe "column"
+        addColumn.audit.targetName shouldBe "users.nickname"
+        addColumn.audit.reversible shouldBe true
+        addColumn.audit.reverseSql shouldBe """ALTER TABLE "users" DROP COLUMN "nickname";"""
 
         val addCheck = plan.steps.first { it.change == "add check users.chk_users_nickname" }
         addCheck.audit!!.operation shouldBe "add"
-        addCheck.audit!!.targetType shouldBe "check"
-        addCheck.audit!!.targetName shouldBe "users.chk_users_nickname"
-        addCheck.audit!!.reversible shouldBe true
-        addCheck.audit!!.reverseSql shouldBe """ALTER TABLE "users" DROP CONSTRAINT "chk_users_nickname";"""
+        addCheck.audit.targetType shouldBe "check"
+        addCheck.audit.targetName shouldBe "users.chk_users_nickname"
+        addCheck.audit.reversible shouldBe true
+        addCheck.audit.reverseSql shouldBe """ALTER TABLE "users" DROP CONSTRAINT "chk_users_nickname";"""
     }
 
     "migrationPlan diff emits reversible SQL for dropped check, unique, and foreign key constraints" {
@@ -570,16 +570,16 @@ class MigrationGeneratorTest : StringSpec({
         val dropCheck = plan.steps.first { it.change == "drop check users.chk_users_email" }
         dropCheck.sql shouldBe """ALTER TABLE "users" DROP CONSTRAINT "chk_users_email";"""
         dropCheck.audit!!.reversible shouldBe true
-        dropCheck.audit!!.reverseSql shouldBe """ALTER TABLE "users" ADD CONSTRAINT "chk_users_email" CHECK (trim("email") <> '');"""
+        dropCheck.audit.reverseSql shouldBe """ALTER TABLE "users" ADD CONSTRAINT "chk_users_email" CHECK (trim("email") <> '');"""
 
         val dropUnique = plan.steps.first { it.change == "drop unique users.uq_users_email" }
         dropUnique.sql shouldBe """ALTER TABLE "users" DROP CONSTRAINT "uq_users_email";"""
         dropUnique.audit!!.reversible shouldBe true
-        dropUnique.audit!!.reverseSql shouldBe """ALTER TABLE "users" ADD CONSTRAINT "uq_users_email" UNIQUE ("email");"""
+        dropUnique.audit.reverseSql shouldBe """ALTER TABLE "users" ADD CONSTRAINT "uq_users_email" UNIQUE ("email");"""
 
         val dropFk = plan.steps.first { it.change == "drop foreign key users.fk_users_account_id" }
         dropFk.sql shouldBe """ALTER TABLE "users" DROP CONSTRAINT "fk_users_account_id";"""
         dropFk.audit!!.reversible shouldBe true
-        dropFk.audit!!.reverseSql shouldBe """ALTER TABLE "users" ADD CONSTRAINT "fk_users_account_id" FOREIGN KEY ("account_id") REFERENCES "accounts" ("id") ON DELETE CASCADE ON UPDATE RESTRICT;"""
+        dropFk.audit.reverseSql shouldBe """ALTER TABLE "users" ADD CONSTRAINT "fk_users_account_id" FOREIGN KEY ("account_id") REFERENCES "accounts" ("id") ON DELETE CASCADE ON UPDATE RESTRICT;"""
     }
 })

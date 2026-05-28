@@ -41,7 +41,7 @@ class AggRow internal constructor(
      */
     @Suppress("UNCHECKED_CAST")
     operator fun <V> get(expr: NamedExpr<V>): V? =
-        (expr.expr.codec as Codec<V>).read(row, expr.label)
+        expr.expr.codec.read(row, expr.label)
 
     /**
      * Decode the value of [expr] and assert it is non-null.
