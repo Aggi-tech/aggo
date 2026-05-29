@@ -521,6 +521,60 @@ class MigrationGeneratorTest : StringSpec({
         addCheck.audit.reverseSql shouldBe """ALTER TABLE "users" DROP CONSTRAINT "chk_users_nickname";"""
     }
 
+    // M-25: a new table added in a diff must carry its FK and index steps — the bug was that
+    // diffSchemas emitted CREATE TABLE but silently dropped FK/index steps for new tables,
+    // causing the snapshot to record FKs that were never applied to the database.
+    "migrationPlan diff emits FK and index steps for a newly added table, ordered after CREATE TABLE" {
+        val previous = MigrationSchema(
+            "v1",
+            listOf(MigrationTable("environments", listOf(MigrationColumn("id", "TEXT", nullable = false)), primaryKey = listOf("id"))),
+        )
+        val current = MigrationSchema(
+            "v2",
+            listOf(
+                MigrationTable("environments", listOf(MigrationColumn("id", "TEXT", nullable = false)), primaryKey = listOf("id")),
+                MigrationTable(
+                    name = "deployments",
+                    columns = listOf(
+                        MigrationColumn("id", "TEXT", nullable = false),
+                        MigrationColumn("environment_id", "TEXT", nullable = false),
+                    ),
+                    primaryKey = listOf("id"),
+                    foreignKeys = listOf(
+                        MigrationForeignKey(
+                            name = "fk_deployments_environment_id",
+                            column = "environment_id",
+                            referencedTable = "environments",
+                            referencedColumn = "id",
+                            onDelete = "CASCADE",
+                            onUpdate = "RESTRICT",
+                        )
+                    ),
+                    indexes = listOf(MigrationIndex("idx_deployments_environment_id", listOf("environment_id"), "btree")),
+                ),
+            ),
+        )
+
+        val plan = migrationPlan(current, PostgresDialect, previous = previous)
+
+        val changes = plan.steps.map { it.change }
+        changes.contains("create table deployments") shouldBe true
+        changes.contains("add foreign key deployments.fk_deployments_environment_id") shouldBe true
+        changes.contains("create index deployments.idx_deployments_environment_id") shouldBe true
+
+        val tableIdx = changes.indexOf("create table deployments")
+        val fkIdx    = changes.indexOf("add foreign key deployments.fk_deployments_environment_id")
+        val idxIdx   = changes.indexOf("create index deployments.idx_deployments_environment_id")
+        (tableIdx < fkIdx) shouldBe true
+        (tableIdx < idxIdx) shouldBe true
+
+        plan.steps.first { it.change == "add foreign key deployments.fk_deployments_environment_id" }
+            .sql shouldBe """ALTER TABLE "deployments" ADD CONSTRAINT "fk_deployments_environment_id" FOREIGN KEY ("environment_id") REFERENCES "environments" ("id") ON DELETE CASCADE ON UPDATE RESTRICT;"""
+
+        plan.steps.first { it.change == "create index deployments.idx_deployments_environment_id" }
+            .sql shouldBe """CREATE INDEX "idx_deployments_environment_id" ON "deployments" USING btree ("environment_id");"""
+    }
+
     "migrationPlan diff emits reversible SQL for dropped check, unique, and foreign key constraints" {
         val previous = MigrationSchema(
             "v1",

@@ -681,6 +681,28 @@ class Session internal constructor(
         return statement.execute()
     }
 
+    override suspend fun readLatestSnapshot(): String? = runCatching {
+        val versionTable = dialect.qualifyTableName(VERSION_TABLE)
+        val sql = "SELECT \"snapshot\" FROM $versionTable " +
+            "WHERE \"snapshot\" IS NOT NULL ORDER BY \"applied_at\" DESC LIMIT 1"
+        QueryLog.beforeExecute(sql, emptyList())
+        val statement = connection.createStatement(sql)
+        var result: String? = null
+        statement.execute().asResultFlow().collect { r ->
+            val pub: Publisher<String?> = r.map { row, _ -> row.get("snapshot", String::class.java) }
+            pub.collect { v -> if (v != null) result = v }
+        }
+        result
+    }.getOrElse { null }
+
+    override suspend fun storeSnapshot(version: String, snapshotJson: String) {
+        val versionTable = dialect.qualifyTableName(VERSION_TABLE)
+        executeMigrationSql(
+            "UPDATE $versionTable SET \"snapshot\" = ${sqlLiteral(snapshotJson)} " +
+                "WHERE \"version\" = ${sqlLiteral(version)};",
+        )
+    }
+
     private suspend fun ensureVersionTable() {
         val versionTable = dialect.qualifyTableName(VERSION_TABLE)
         executeMigrationSql(
@@ -696,6 +718,9 @@ class Session internal constructor(
         )
         executeMigrationSql(
             "ALTER TABLE $versionTable ADD COLUMN IF NOT EXISTS \"checksum\" TEXT;",
+        )
+        executeMigrationSql(
+            "ALTER TABLE $versionTable ADD COLUMN IF NOT EXISTS \"snapshot\" TEXT;",
         )
     }
 

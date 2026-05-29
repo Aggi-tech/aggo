@@ -184,4 +184,7 @@ class TransactionBuilder internal constructor(
 
     suspend fun applyMigrations(migrationsDir: Path): List<MigrationResult> =
         applyMigrations(readMigrationFiles(migrationsDir))
+
+    suspend fun storeSnapshot(version: String, snapshotJson: String) =
+        invoke { tx -> tx.storeSnapshot(version, snapshotJson) }
 }

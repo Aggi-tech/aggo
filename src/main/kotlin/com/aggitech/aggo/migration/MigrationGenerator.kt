@@ -457,6 +457,10 @@ private fun diffSchemas(
     ifNotExists: Boolean = false,
 ): List<MigrationStep> {
     val steps = mutableListOf<MigrationStep>()
+    // FK and index steps for brand-new tables must come after ALL CREATE TABLE steps
+    // to avoid forward-reference failures when multiple tables reference each other.
+    val newTableFkSteps = mutableListOf<MigrationStep>()
+    val newTableIndexSteps = mutableListOf<MigrationStep>()
     val previousTables = previous.tables.associateBy { it.name }
     val currentTables = current.tables.associateBy { it.name }
 
@@ -473,6 +477,30 @@ private fun diffSchemas(
                     reverseSql = table.dropTableSql(dialect, ifExists = true),
                 ),
             )
+            for (fk in table.foreignKeys) {
+                newTableFkSteps += MigrationStep(
+                    change = "add foreign key ${table.name}.${fk.name}",
+                    sql = buildFkAlterTable(table.name, fk, dialect),
+                    audit = audit(
+                        operation = "add",
+                        targetType = "foreign key",
+                        targetName = "${table.name}.${fk.name}",
+                        reverseSql = dropConstraintSql(table.name, fk.name, dialect),
+                    ),
+                )
+            }
+            for (idx in table.indexes) {
+                newTableIndexSteps += MigrationStep(
+                    change = "create index ${table.name}.${idx.name}",
+                    sql = buildIndexSql(table.name, idx, dialect),
+                    audit = audit(
+                        operation = "create",
+                        targetType = "index",
+                        targetName = "${table.name}.${idx.name}",
+                        reverseSql = dropIndexSql(idx.name, dialect),
+                    ),
+                )
+            }
         } else {
             steps += diffTable(oldTable, table, dialect)
         }
@@ -494,7 +522,7 @@ private fun diffSchemas(
         }
     }
 
-    return steps
+    return steps + newTableFkSteps + newTableIndexSteps
 }
 
 private fun diffTable(

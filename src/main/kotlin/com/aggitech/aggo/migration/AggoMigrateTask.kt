@@ -140,24 +140,14 @@ abstract class AggoMigrateTask {
 }
 
 /**
- * Resolves Aggo's generated schema snapshot path for the current build tool.
+ * Resolves the default Aggo schema snapshot path.
  *
- * Maven projects use `target/aggo/snapshot.json`; Gradle projects use
- * `build/aggo/snapshot.json`. If both build descriptors are present, Maven wins
- * because this task is Maven-oriented by default and Gradle users can still
- * override [AggoMigrateTask.snapshotFile] or `-Daggo.snapshotFile`.
+ * The snapshot lives in `src/main/aggo/snapshot.json` — a source-tracked location
+ * that survives `mvn clean` / `gradle clean`. It is not under `src/main/resources`
+ * so it is never bundled into the application JAR.
+ *
+ * Override [AggoMigrateTask.snapshotFile] or set `-Daggo.snapshotFile` to use a
+ * different path.
  */
-fun defaultSnapshotFile(projectDir: Path = Paths.get("").toAbsolutePath()): Path {
-    val isMaven = Files.exists(projectDir.resolve("pom.xml"))
-    val isGradle = Files.exists(projectDir.resolve("build.gradle.kts")) ||
-        Files.exists(projectDir.resolve("build.gradle")) ||
-        Files.exists(projectDir.resolve("settings.gradle.kts")) ||
-        Files.exists(projectDir.resolve("settings.gradle"))
-
-    val buildDir = when {
-        isMaven -> "target"
-        isGradle -> "build"
-        else -> "target"
-    }
-    return projectDir.resolve(buildDir).resolve("aggo").resolve("snapshot.json")
-}
+fun defaultSnapshotFile(projectDir: Path = Paths.get("").toAbsolutePath()): Path =
+    projectDir.resolve("src").resolve("main").resolve("aggo").resolve("snapshot.json")

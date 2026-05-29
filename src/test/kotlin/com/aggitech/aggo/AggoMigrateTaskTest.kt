@@ -96,17 +96,17 @@ class AggoMigrateTaskTest : StringSpec({
         files.size shouldBe 1
     }
 
-    "default snapshot path uses target/aggo for Maven projects" {
+    "default snapshot path resolves to src/main/aggo/snapshot.json regardless of build tool" {
         val base = Files.createTempDirectory("aggo-maven-project")
         Files.writeString(base.resolve("pom.xml"), "<project />")
 
-        defaultSnapshotFile(base) shouldBe base.resolve("target/aggo/snapshot.json")
+        defaultSnapshotFile(base) shouldBe base.resolve("src/main/aggo/snapshot.json")
     }
 
-    "default snapshot path uses build/aggo for Gradle projects" {
+    "default snapshot path is identical for Gradle projects" {
         val base = Files.createTempDirectory("aggo-gradle-project")
         Files.writeString(base.resolve("build.gradle.kts"), "plugins {}")
 
-        defaultSnapshotFile(base) shouldBe base.resolve("build/aggo/snapshot.json")
+        defaultSnapshotFile(base) shouldBe base.resolve("src/main/aggo/snapshot.json")
     }
 })
