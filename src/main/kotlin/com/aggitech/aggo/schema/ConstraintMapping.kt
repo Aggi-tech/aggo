@@ -13,10 +13,11 @@ import com.aggitech.aggo.runtime.ConstraintKind
  */
 fun Table<*>.constraintErrorDescriptors(): List<ConstraintErrorDescriptor> {
     val checkDescriptors = columns.flatMap { col ->
-        col.checkConstraints.map { check ->
+        val constraints = col.checkConstraints
+        constraints.mapIndexed { index, check ->
             ConstraintErrorDescriptor(
-                key = check.effectiveKey(name, col.name),
-                constraintName = check.effectiveName(name, col.name),
+                key = check.effectiveKey(name, col.name, index, constraints.size),
+                constraintName = check.effectiveName(name, col.name, index, constraints.size),
                 kind = ConstraintKind.CHECK,
                 table = name,
                 column = col.name,

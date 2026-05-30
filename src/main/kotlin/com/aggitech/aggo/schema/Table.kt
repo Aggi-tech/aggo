@@ -4,6 +4,7 @@ import com.aggitech.aggo.dialect.requireValidIdentifier
 import com.aggitech.aggo.schema.ids.Tsid
 import com.aggitech.aggo.schema.ids.Ulid
 import io.r2dbc.spi.Row
+import kotlin.enums.enumEntries
 import java.math.BigDecimal
 import java.time.Instant
 import java.time.LocalDate
@@ -99,7 +100,10 @@ abstract class Table<E>(val name: String) {
         isPrimaryKey = isPrimaryKey,
         isGenerated = isGenerated,
         isNullable = isNullable,
-        checks = check?.let { listOf(CheckConstraint(expression = it)) } ?: emptyList(),
+        checks = check?.let { expr ->
+            if (expr is CheckConstraint) listOf(expr)
+            else listOf(CheckConstraint(expression = expr))
+        } ?: emptyList(),
         unique = null,
         sensitive = sensitive,
         sqlType = sqlType,
@@ -231,7 +235,7 @@ abstract class Table<E>(val name: String) {
 
     /** Starts a fluent enum column stored by [Enum.name] and constrained to declared enum values. */
     protected inline fun <reified V : Enum<V>> enumName(name: String, length: Int = 64): ColumnBuilder<E, V> =
-        varchar(name, length, enumNameCodec<V>()).check(Checks.oneOf(*enumValues<V>().map { it.name }.toTypedArray()))
+        varchar(name, length, enumNameCodec<V>()).check(Checks.oneOf(*enumEntries<V>().map { it.name }.toTypedArray()))
 
     // ----- Typed column builders ------------------------------------------
     //
@@ -604,7 +608,20 @@ abstract class Table<E>(val name: String) {
         fun sensitive(): ColumnBuilder<T, V> = copy(sensitive = true)
 
         /**
-         * Adds a named CHECK constraint.
+         * Adds a single [CheckConstraint] (e.g. from [Checks]) preserving its [key] and [name].
+         *
+         * When the constraint already carries a [key] (set via `Checks.notBlank(key = "…")`),
+         * that key is forwarded to `constraintErrorMap` without any additional wrapping.
+         */
+        fun check(constraint: CheckConstraint): ColumnBuilder<T, V> =
+            copy(checks = checks + constraint)
+
+        /** Adds a [CheckConstraint] and registers the column with [getter]. */
+        fun check(constraint: CheckConstraint, getter: (T) -> V?): Column<T, V> =
+            check(constraint).map(getter)
+
+        /**
+         * Adds a plain lambda CHECK constraint with optional [name] and [key].
          *
          * [key] is the stable application-facing key returned by typed error
          * mapping when the database reports this constraint.
@@ -615,13 +632,29 @@ abstract class Table<E>(val name: String) {
             key: String? = null,
         ): ColumnBuilder<T, V> = copy(checks = checks + CheckConstraint(check, name, key))
 
-        /** Adds a CHECK constraint and registers the column with [getter]. */
+        /** Adds a plain lambda CHECK constraint and registers the column with [getter]. */
         fun check(
             check: (String) -> String,
             name: String? = null,
             key: String? = null,
             getter: (T) -> V?,
         ): Column<T, V> = check(check, name, key).map(getter)
+
+        /**
+         * Appends multiple [CheckConstraint]s in a single call, each with its own [key] and [name].
+         *
+         * ```kotlin
+         * val id = tsid("id")
+         *     .checks(
+         *         Checks.notBlank(key = "id.blank"),
+         *         Checks.tsid(key   = "id.format"),
+         *     )
+         *     .primaryKey()
+         *     .required { it.id }
+         * ```
+         */
+        fun checks(vararg constraints: CheckConstraint): ColumnBuilder<T, V> =
+            copy(checks = checks + constraints.toList())
 
         /**
          * Adds a single-column UNIQUE constraint.

@@ -195,9 +195,10 @@ fun Table<*>.toMigrationTable(dialect: MigrationDialect): MigrationTable =
             )
         },
         checks = columns.flatMap { col ->
-            col.checkConstraints.map { check ->
+            val constraints = col.checkConstraints
+            constraints.mapIndexed { index, check ->
                 MigrationCheck(
-                    name = check.effectiveName(name, col.name),
+                    name = check.effectiveName(name, col.name, index, constraints.size),
                     expression = check.expression(col.name),
                 )
             }
