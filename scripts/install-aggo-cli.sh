@@ -176,11 +176,27 @@ find_project_root() {
   done
 }
 
+find_gradle_wrapper_dir() {
+  current="\$project_dir"
+  while :; do
+    if [ -x "\$current/gradlew" ]; then
+      printf '%s\n' "\$current"
+      return
+    fi
+    parent="\$(dirname "\$current")"
+    if [ "\$parent" = "\$current" ]; then
+      return 1
+    fi
+    current="\$parent"
+  done
+}
+
 run_gradle() {
-  cd "\$project_dir"
-  if [ -x ./gradlew ]; then
-    exec ./gradlew -q '$gradle_task' --args="\$*"
+  if wrapper_dir="\$(find_gradle_wrapper_dir)"; then
+    cd "\$wrapper_dir"
+    exec ./gradlew -q -p "\$project_dir" '$gradle_task' --args="\$*"
   fi
+  cd "\$project_dir"
   exec gradle -q '$gradle_task' --args="\$*"
 }
 

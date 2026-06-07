@@ -194,7 +194,7 @@ class MigrationCliTest : StringSpec({
         launcher.toFile().canExecute() shouldBe true
         launcher.readText() shouldContain "start_dir=\"\${AGGO_PROJECT_DIR:-\$(pwd)}\""
         launcher.readText() shouldContain "find_project_root"
-        launcher.readText() shouldContain "exec ./gradlew -q ':aggoCliRun' --args=\"\$*\""
+        launcher.readText() shouldContain "exec ./gradlew -q -p \"\$project_dir\" ':aggoCliRun' --args=\"\$*\""
         launcher.readText() shouldContain "exec gradle -q ':aggoCliRun' --args=\"\$*\""
     }
 
@@ -252,7 +252,7 @@ class MigrationCliTest : StringSpec({
         Files.exists(launcher) shouldBe true
         launcher.toFile().canExecute() shouldBe true
         launcher.readText() shouldContain "start_dir=\"\${AGGO_PROJECT_DIR:-\$(pwd)}\""
-        launcher.readText() shouldContain "exec ./gradlew -q ':infrastructure:aggo' --args=\"\$*\""
+        launcher.readText() shouldContain "exec ./gradlew -q -p \"\$project_dir\" ':infrastructure:aggo' --args=\"\$*\""
         launcher.readText() shouldContain "exec gradle -q ':infrastructure:aggo' --args=\"\$*\""
         out shouldContain "Installed Aggo CLI"
     }
