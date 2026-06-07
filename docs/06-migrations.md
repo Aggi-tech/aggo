@@ -78,9 +78,9 @@ After that, use `aggo` like any other CLI executable:
 
 ```bash
 aggo migrate generate --name add_orders_table
-aggo migrate run
-aggo migrate status
-aggo migrate dry-run
+aggo migrate run --migration-file src/main/resources/aggo/migrations/2026.06.07.001_add_orders_table.sql
+aggo migrate status --migration-file src/main/resources/aggo/migrations/2026.06.07.001_add_orders_table.sql
+aggo migrate dry-run --migration-file src/main/resources/aggo/migrations/2026.06.07.001_add_orders_table.sql
 ```
 
 By default this writes `~/.local/bin/aggo`. If that directory is not on your
@@ -186,12 +186,15 @@ curl -fsSL https://raw.githubusercontent.com/Aggi-tech/aggo/main/scripts/install
 ```
 
 The script writes an executable named `aggo` to `~/.local/bin` by default. It
-auto-detects Gradle when `./gradlew` exists; otherwise it uses Maven:
+auto-detects Gradle from `gradlew`, `build.gradle(.kts)`, or
+`settings.gradle(.kts)`; otherwise it uses Maven. The installed executable
+resolves the project root from the directory where you run `aggo`, so it does
+not need to be reinstalled when you move between projects:
 
 ```bash
 aggo migrate generate --name add_orders_table
-aggo migrate run
-aggo migrate status
+aggo migrate run --migration-file src/main/resources/aggo/migrations/2026.06.07.001_add_orders_table.sql
+aggo migrate status --migration-file src/main/resources/aggo/migrations/2026.06.07.001_add_orders_table.sql
 ```
 
 Options:
@@ -217,21 +220,21 @@ mvn compile exec:java
 mvn compile exec:java -Dexec.args="migrate generate add_orders_table"
 mvn compile exec:java -Dexec.args="migrate generate --name add_orders_table"
 
-# Apply pending migrations against the configured database
-mvn compile exec:java -Dexec.args="migrate run"
+# Apply a migration file against the configured database
+mvn compile exec:java -Dexec.args="migrate run --migration-file src/main/resources/aggo/migrations/2026.06.07.001_add_orders_table.sql"
 
-# Show applied vs pending without running anything
-mvn compile exec:java -Dexec.args="migrate status"
+# Show whether a migration file has been applied
+mvn compile exec:java -Dexec.args="migrate status --migration-file src/main/resources/aggo/migrations/2026.06.07.001_add_orders_table.sql"
 
-# Print the pending SQL to stdout without applying
-mvn compile exec:java -Dexec.args="migrate dry-run"
+# Print one migration file's SQL to stdout without applying
+mvn compile exec:java -Dexec.args="migrate dry-run --migration-file src/main/resources/aggo/migrations/2026.06.07.001_add_orders_table.sql"
 
 # Drop every declared table and aggo_schema_versions (dev only by default)
 mvn compile exec:java -Dexec.args="migrate drop"
 mvn compile exec:java -Dexec.args="migrate drop --force"   # bypass prod guard
 
-# Drop + apply in one shot (e.g. reset a local DB after schema churn)
-mvn compile exec:java -Dexec.args="migrate reset"
+# Drop + apply one migration in one shot (e.g. reset a local DB after schema churn)
+mvn compile exec:java -Dexec.args="migrate reset --migration-file src/main/resources/aggo/migrations/2026.06.07.001_add_orders_table.sql"
 
 # Print help
 mvn compile exec:java -Dexec.args="migrate help"
@@ -243,12 +246,14 @@ Maven projects can install the same Unix launcher:
 mvn compile exec:java -Dexec.args="migrate install-cli --runner maven"
 
 aggo migrate generate --name add_orders_table
-aggo migrate run
+aggo migrate run --migration-file src/main/resources/aggo/migrations/2026.06.07.001_add_orders_table.sql
 ```
 
 `generate` produces a `{timestamp}_name.sql` file under `migrationsDir` and
 updates the snapshot. On a clean run with no schema changes it prints
 `No changes detected.` and exits without writing anything.
+`run`, `status`, `dry-run`, and `reset` require `--migration-file` so the caller
+explicitly chooses the generated file being inspected or applied.
 
 #### Production safety
 

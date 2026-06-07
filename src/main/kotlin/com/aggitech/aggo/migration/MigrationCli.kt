@@ -55,9 +55,9 @@ internal object MigrationCli {
 
         when (subcommand) {
             "generate", "gen" -> generate(task, rest)
-            "status"          -> status(task)
-            "run", "apply", "up" -> apply(task)
-            "dry-run", "sql"  -> dryRun(task)
+            "status"          -> status(task, rest)
+            "run", "apply", "up" -> apply(task, rest)
+            "dry-run", "sql"  -> dryRun(rest)
             "install-cli"      -> installCli(rest)
             "drop"            -> drop(task, rest)
             "reset"           -> reset(task, rest)
@@ -149,7 +149,7 @@ internal object MigrationCli {
     private fun unixCliInstallRequestFrom(args: Array<String>): UnixCliInstallRequest {
         var commandName = "aggo"
         var installDir = defaultUnixInstallDir()
-        var projectDir = Paths.get("").toAbsolutePath()
+        var projectDir = defaultUnixProjectDir(Paths.get("").toAbsolutePath())
         var runner: UnixCliRunner? = null
         var gradleTask = ":aggoCliRun"
 
@@ -176,8 +176,8 @@ internal object MigrationCli {
         return UnixCliInstallRequest(
             commandName = commandName,
             installDir = installDir,
-            projectDir = projectDir,
-            runner = runner ?: defaultUnixCliRunner(projectDir),
+            projectDir = defaultUnixProjectDir(projectDir),
+            runner = runner ?: UnixCliRunner.AUTO,
             gradleTask = gradleTask,
         )
     }
@@ -192,47 +192,33 @@ internal object MigrationCli {
             ?: error("$option requires a value")
 
     private fun unixRunner(value: String): UnixCliRunner = when (value.lowercase()) {
+        "auto"   -> UnixCliRunner.AUTO
         "gradle" -> UnixCliRunner.GRADLE
         "maven"  -> UnixCliRunner.MAVEN
-        else     -> error("--runner must be gradle or maven, got: $value")
+        else     -> error("--runner must be auto, gradle or maven, got: $value")
     }
 
     // ----- status ---------------------------------------------------------
 
-    private fun status(task: AggoMigrateTask) {
-        val files = readMigrationFiles(task.migrationsDir)
-        if (files.isEmpty()) {
-            println("No migration files found under ${task.migrationsDir}.")
-            return
-        }
+    private fun status(task: AggoMigrateTask, args: Array<String>) {
+        val migrationFile = requireMigrationFile(args)
+        val file = parseMigrationFile(migrationFile)
 
         withAggo(task) { aggo ->
             val applied = runBlocking { fetchAppliedVersions(aggo) }
-            println("Migrations under ${task.migrationsDir}:")
-            for (entry in files) {
-                val marker = if (entry.version in applied) "[applied]" else "[pending]"
-                println("  $marker ${entry.version}")
-            }
-            val pending = files.count { it.version !in applied }
-            val orphans = applied.filter { v -> files.none { it.version == v } }
-            println()
-            println("${files.size} total, ${files.size - pending} applied, $pending pending.")
-            if (orphans.isNotEmpty()) {
-                println("Applied in DB but missing on disk: ${orphans.joinToString()}")
-            }
+            val marker = if (file.version in applied) "[applied]" else "[pending]"
+            println("Migration file: $migrationFile")
+            println("  $marker ${file.version}")
         }
     }
 
     // ----- apply ----------------------------------------------------------
 
-    private fun apply(task: AggoMigrateTask) {
-        val files = readMigrationFiles(task.migrationsDir)
-        if (files.isEmpty()) {
-            println("No migration files found under ${task.migrationsDir}.")
-            return
-        }
+    private fun apply(task: AggoMigrateTask, args: Array<String>) {
+        val migrationFile = requireMigrationFile(args)
+        val file = parseMigrationFile(migrationFile)
         withAggo(task) { aggo ->
-            val results = runBlocking { aggo.tx.applyMigrations(task.migrationsDir) }
+            val results = runBlocking { aggo.tx.applyMigrations(listOf(file)) }
             val executed = results.filter { !it.skipped }
             val skipped = results.count { it.skipped }
             for (r in executed) {
@@ -253,17 +239,12 @@ internal object MigrationCli {
 
     // ----- dry-run --------------------------------------------------------
 
-    private fun dryRun(task: AggoMigrateTask) {
-        val files = readMigrationFiles(task.migrationsDir)
-        if (files.isEmpty()) {
-            println("No migration files found under ${task.migrationsDir}.")
-            return
-        }
-        for (entry in files) {
-            println("-- ${entry.version} (from ${entry.fromVersion ?: "<empty>"})")
-            println(entry.sql)
-            println()
-        }
+    private fun dryRun(args: Array<String>) {
+        val migrationFile = requireMigrationFile(args)
+        val entry = parseMigrationFile(migrationFile)
+        println("-- ${entry.version} (from ${entry.fromVersion ?: "<empty>"})")
+        println(entry.sql)
+        println()
     }
 
     // ----- drop -----------------------------------------------------------
@@ -302,7 +283,7 @@ internal object MigrationCli {
     private fun reset(task: AggoMigrateTask, args: Array<String>) {
         requireForceInProd(task, "reset", args)
         drop(task, args)
-        apply(task)
+        apply(task, args)
     }
 
     // ----- help -----------------------------------------------------------
@@ -315,6 +296,7 @@ internal object MigrationCli {
               aggo migrate generate [name]
               aggo migrate generate --name add_orders
               aggo migrate run
+              aggo migrate run --migration-file path/to/migration.sql
               aggo migrate status
               aggo migrate dry-run
               aggo migrate install-cli
@@ -331,6 +313,9 @@ internal object MigrationCli {
               drop                Drop every declared table plus aggo_schema_versions.
               reset               drop followed by run.
               help                Show this text.
+
+            File-based migration commands:
+              run, status, dry-run, and reset require --migration-file path/to/migration.sql.
 
             Database configuration (apply, status, drop, reset):
               Override poolConfig in your AggoMigrateTask subclass, or set
@@ -351,6 +336,22 @@ internal object MigrationCli {
         check(!isProd || hasForce) {
             "Refusing to $op in production. Set AGGO_ENV=dev/staging or pass --force to override."
         }
+    }
+
+    private fun requireMigrationFile(args: Array<String>): Path =
+        migrationFileFrom(args) ?: error("--migration-file is required for file-based migration commands")
+
+    private fun migrationFileFrom(args: Array<String>): Path? {
+        var i = 0
+        while (i < args.size) {
+            val arg = args[i]
+            when {
+                arg == "--migration-file" -> return Paths.get(optionValue(args, i, arg))
+                arg.startsWith("--migration-file=") -> return Paths.get(valueAfterEquals(arg, "--migration-file"))
+            }
+            i++
+        }
+        return null
     }
 
     private fun withAggo(task: AggoMigrateTask, block: (Aggo) -> Unit) {

@@ -32,6 +32,34 @@ command_name="aggo"
 runner="auto"
 gradle_task=":aggoCliRun"
 
+has_gradle_build() {
+  [ -x "$1/gradlew" ] ||
+    [ -f "$1/build.gradle" ] ||
+    [ -f "$1/build.gradle.kts" ] ||
+    [ -f "$1/settings.gradle" ] ||
+    [ -f "$1/settings.gradle.kts" ]
+}
+
+has_build_file() {
+  has_gradle_build "$1" || [ -f "$1/pom.xml" ]
+}
+
+find_project_root() {
+  current="$(cd "$1" && pwd)"
+  while :; do
+    if has_build_file "$current"; then
+      printf '%s\n' "$current"
+      return
+    fi
+    parent="$(dirname "$current")"
+    if [ "$parent" = "$current" ]; then
+      printf '%s\n' "$(cd "$1" && pwd)"
+      return
+    fi
+    current="$parent"
+  done
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --main-class)
@@ -101,6 +129,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$main_class" ] || { echo "error: --main-class is required" >&2; usage >&2; exit 2; }
+project_dir="$(find_project_root "$project_dir")"
 
 case "$command_name" in
   [A-Za-z][A-Za-z0-9_-]*) ;;
@@ -108,35 +137,84 @@ case "$command_name" in
 esac
 
 case "$runner" in
-  auto)
-    if [ -x "$project_dir/gradlew" ]; then
-      runner="gradle"
-    else
-      runner="maven"
-    fi
-    ;;
-  gradle|maven) ;;
+  auto|gradle|maven) ;;
   *) echo "error: --runner must be auto, gradle, or maven" >&2; exit 2 ;;
 esac
 
 mkdir -p "$install_dir"
 target="${install_dir}/${command_name}"
 
-if [ "$runner" = "gradle" ]; then
-  cat > "$target" <<EOF
+cat > "$target" <<EOF
 #!/usr/bin/env sh
 set -eu
-cd '$project_dir'
-exec ./gradlew -q '$gradle_task' --args="\$*"
+
+has_gradle_build() {
+  [ -x "\$1/gradlew" ] ||
+    [ -f "\$1/build.gradle" ] ||
+    [ -f "\$1/build.gradle.kts" ] ||
+    [ -f "\$1/settings.gradle" ] ||
+    [ -f "\$1/settings.gradle.kts" ]
+}
+
+has_build_file() {
+  has_gradle_build "\$1" || [ -f "\$1/pom.xml" ]
+}
+
+find_project_root() {
+  current="\$(cd "\$1" && pwd)"
+  while :; do
+    if has_build_file "\$current"; then
+      printf '%s\n' "\$current"
+      return
+    fi
+    parent="\$(dirname "\$current")"
+    if [ "\$parent" = "\$current" ]; then
+      printf '%s\n' "\$(cd "\$1" && pwd)"
+      return
+    fi
+    current="\$parent"
+  done
+}
+
+run_gradle() {
+  cd "\$project_dir"
+  if [ -x ./gradlew ]; then
+    exec ./gradlew -q '$gradle_task' --args="\$*"
+  fi
+  exec gradle -q '$gradle_task' --args="\$*"
+}
+
+run_maven() {
+  cd "\$project_dir"
+  exec mvn -q compile exec:java -Dexec.mainClass='$main_class' -Dexec.args="\$*"
+}
+
+start_dir="\${AGGO_PROJECT_DIR:-\$(pwd)}"
+project_dir="\$(find_project_root "\$start_dir")"
+
+case '$runner' in
+  auto)
+    if has_gradle_build "\$project_dir"; then
+      run_gradle
+    elif [ -f "\$project_dir/pom.xml" ]; then
+      run_maven
+    else
+      echo "aggo: no Gradle or Maven build file found from \$start_dir" >&2
+      exit 1
+    fi
+    ;;
+  gradle)
+    run_gradle
+    ;;
+  maven)
+    run_maven
+    ;;
+  *)
+    echo "aggo: invalid runner: $runner" >&2
+    exit 1
+    ;;
+esac
 EOF
-else
-  cat > "$target" <<EOF
-#!/usr/bin/env sh
-set -eu
-cd '$project_dir'
-exec mvn -q compile exec:java -Dexec.mainClass='$main_class' -Dexec.args="\$*"
-EOF
-fi
 
 chmod +x "$target"
 
