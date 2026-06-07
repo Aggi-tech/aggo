@@ -36,27 +36,30 @@ import java.nio.file.Paths
  *
  * ## Subcommands
  *
- * Pass the subcommand as the first positional argument:
+ * Pass `migrate` as the command group and the subcommand after it. The
+ * historical form without `migrate` is still accepted for compatibility.
  *
- * | Subcommand   | Effect                                                            |
- * |--------------|-------------------------------------------------------------------|
- * | `generate`   | Generate a migration file (default when no subcommand given).     |
- * | `apply`      | Run pending migrations against the configured database.           |
- * | `status`     | List applied vs pending migrations.                               |
- * | `dry-run`    | Print pending migration SQL without applying.                     |
- * | `drop`       | Drop every declared table plus `aggo_schema_versions`.            |
- * | `reset`      | `drop` followed by `apply`.                                       |
+ * | Command                    | Effect                                                            |
+ * |----------------------------|-------------------------------------------------------------------|
+ * | `migrate generate [name]`  | Generate a migration file.                                        |
+ * | `migrate run`              | Run pending migrations against the configured database.           |
+ * | `migrate status`           | List applied vs pending migrations.                               |
+ * | `migrate dry-run`          | Print pending migration SQL without applying.                     |
+ * | `migrate install-cli`      | Install a Unix launcher, usually `~/.local/bin/aggo`.             |
+ * | `migrate drop`             | Drop every declared table plus `aggo_schema_versions`.            |
+ * | `migrate reset`            | `drop` followed by `run`.                                         |
  *
  * `drop` and `reset` require `--force` when `AGGO_ENV` (or `-Daggo.env`)
  * resolves to `prod`, so they cannot accidentally wipe a production database.
  *
  * ```bash
- * mvn compile exec:java -Dexec.args="generate add_orders_table"
- * mvn compile exec:java -Dexec.args="apply"
- * mvn compile exec:java -Dexec.args="status"
- * mvn compile exec:java -Dexec.args="dry-run"
- * mvn compile exec:java -Dexec.args="drop --force"
- * mvn compile exec:java -Dexec.args="reset --force"
+ * mvn compile exec:java -Dexec.args="migrate generate add_orders_table"
+ * mvn compile exec:java -Dexec.args="migrate run"
+ * mvn compile exec:java -Dexec.args="migrate status"
+ * mvn compile exec:java -Dexec.args="migrate dry-run"
+ * mvn compile exec:java -Dexec.args="migrate install-cli --runner maven"
+ * mvn compile exec:java -Dexec.args="migrate drop --force"
+ * mvn compile exec:java -Dexec.args="migrate reset --force"
  * ```
  *
  * ## Path resolution
@@ -66,7 +69,7 @@ import java.nio.file.Paths
  *
  * | System property       | Default                                          |
  * |-----------------------|--------------------------------------------------|
- * | `aggo.snapshotFile`   | `target/aggo/snapshot.json` for Maven, `build/aggo/snapshot.json` for Gradle |
+ * | `aggo.snapshotFile`   | `src/main/aggo/snapshot.json`                  |
  * | `aggo.migrationsDir`  | `src/main/resources/aggo/migrations`             |
  * | `aggo.name`           | _(none — timestamp-only version label)_          |
  *
@@ -127,11 +130,11 @@ abstract class AggoMigrateTask {
     /**
      * Dispatches to the requested subcommand. With no arguments (or an argv
      * whose first element is not a known subcommand) this falls back to
-     * `generate` — preserving the original "positional name" contract:
+     * `migrate generate` — preserving the original "positional name" contract:
      *
      * ```bash
      * mvn compile exec:java -Dexec.args="add_orders_table"   # generate, name=add_orders_table
-     * mvn compile exec:java -Dexec.args="apply"               # apply pending migrations
+     * mvn compile exec:java -Dexec.args="migrate run"         # apply pending migrations
      * ```
      */
     fun runFromArgs(args: Array<String>) {

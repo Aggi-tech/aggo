@@ -21,7 +21,7 @@ private val VALID_MIGRATION_NAME = Regex("^[A-Za-z0-9_-]+$")
  *     AggoMigrate.generate(
  *         tables       = listOf(UsersTable, OrdersTable),
  *         dialect      = PostgresDialect,
- *         snapshotFile = Paths.get("target/aggo/snapshot.json"), // Maven
+ *         snapshotFile = Paths.get("src/main/aggo/snapshot.json"),
  *         migrationsDir = Paths.get("src/main/resources/aggo/migrations"),
  *         migrationName = "add_orders_table",   // optional label
  *     )

@@ -17,10 +17,12 @@ Compared with Hibernate `hbm2ddl`, Aggo migrations are intended to be reviewed,
 versioned, and applied deliberately. Do not use automatic schema mutation at
 application startup for production.
 
-## AggoMigrateTask — zero-boilerplate Maven entry point
+## AggoMigrateTask — project CLI entry point
 
-`AggoMigrateTask` is the recommended way to trigger migration generation from
-Maven. It replaces manual `main()` functions with a single-object declaration.
+`AggoMigrateTask` is the recommended way to expose migration generation as a
+small project CLI. It replaces manual migration generator functions with a
+single-object declaration and works with Maven, Gradle, or any launcher that can
+run a Kotlin `main`.
 
 ### 1. Declare the task
 
@@ -37,54 +39,211 @@ object Migrations : AggoMigrateTask() {
 fun main(args: Array<String>) = Migrations.runFromArgs(args)
 ```
 
-### 2. Wire exec-maven-plugin in pom.xml
+### 2. Wire the launcher
+
+#### Gradle Kotlin DSL
+
+Register two JavaExec tasks: `aggoCli` installs the Unix executable, and
+`aggoCliRun` is the internal runner used by that executable.
+
+```kotlin
+// build.gradle.kts
+tasks.register<JavaExec>("aggoCli") {
+    group = "aggo"
+    description = "Install the Aggo CLI executable"
+    dependsOn("classes")
+
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("com.example.db.MigrationsKt")
+    args("migrate", "install-cli")
+}
+
+tasks.register<JavaExec>("aggoCliRun") {
+    group = "aggo"
+    description = "Run the Aggo CLI"
+    dependsOn("classes")
+
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("com.example.db.MigrationsKt")
+}
+```
+
+Install the Unix launcher once:
+
+```bash
+./gradlew :aggoCli
+```
+
+After that, use `aggo` like any other CLI executable:
+
+```bash
+aggo migrate generate --name add_orders_table
+aggo migrate run
+aggo migrate status
+aggo migrate dry-run
+```
+
+By default this writes `~/.local/bin/aggo`. If that directory is not on your
+PATH, add it to your shell profile:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+You can customize the install path or command name:
+
+```bash
+./gradlew :aggoCli --args="migrate install-cli --dir /usr/local/bin --command aggo"
+```
+
+If your team wants the shorter task that failed in the build log
+(`:infrastructure:aggoGenerate`), register aliases on top of the same CLI:
+
+```kotlin
+tasks.register<JavaExec>("aggoGenerate") {
+    group = "aggo"
+    description = "Generate an Aggo migration"
+    dependsOn("classes")
+
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("com.example.db.MigrationsKt")
+    args("migrate", "generate")
+
+    providers.gradleProperty("name").orNull
+        ?.takeIf { it.isNotBlank() }
+        ?.let { args("--name", it) }
+}
+
+tasks.register<JavaExec>("aggoMigrateRun") {
+    group = "aggo"
+    description = "Run pending Aggo migrations"
+    dependsOn("classes")
+
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("com.example.db.MigrationsKt")
+    args("migrate", "run")
+}
+```
+
+Usage:
+
+```bash
+./gradlew :infrastructure:aggoGenerate -Pname=add_orders_table
+./gradlew :infrastructure:aggoMigrateRun
+```
+
+#### Maven plugin
 
 ```xml
 <plugin>
-  <groupId>org.codehaus.mojo</groupId>
-  <artifactId>exec-maven-plugin</artifactId>
-  <version>3.4.1</version>
-  <executions>
-    <execution>
-      <id>aggo-migrate</id>
-      <goals><goal>java</goal></goals>
-      <configuration>
-        <mainClass>com.example.db.MigrationsKt</mainClass>
-      </configuration>
-    </execution>
-  </executions>
+  <groupId>com.aggitech</groupId>
+  <artifactId>aggo-maven-plugin</artifactId>
+  <version>0.7.0</version>
+  <configuration>
+    <mainClass>com.example.db.MigrationsKt</mainClass>
+  </configuration>
 </plugin>
+```
+
+Install the Unix launcher once:
+
+```bash
+mvn aggo:install
+```
+
+This writes `~/.local/bin/aggo` by default. After that, use the installed
+command:
+
+```bash
+aggo migrate generate --name add_orders_table
+aggo migrate run
+aggo migrate status
+```
+
+You can override the install location when needed:
+
+```bash
+mvn aggo:install -Daggo.installDir=/usr/local/bin
+```
+
+#### Script installer
+
+If you do not want to add the Maven plugin or any Gradle task to the project,
+install the Unix executable with the standalone script. The only project
+requirement is a `main` that delegates to `AggoMigrateTask.runFromArgs(args)`.
+
+From this repository:
+
+```bash
+./scripts/install-aggo-cli.sh --main-class com.example.db.MigrationsKt
+```
+
+Or from another project, run this from the project root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Aggi-tech/aggo/main/scripts/install-aggo-cli.sh \
+  | sh -s -- --main-class com.example.db.MigrationsKt
+```
+
+The script writes an executable named `aggo` to `~/.local/bin` by default. It
+auto-detects Gradle when `./gradlew` exists; otherwise it uses Maven:
+
+```bash
+aggo migrate generate --name add_orders_table
+aggo migrate run
+aggo migrate status
+```
+
+Options:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Aggi-tech/aggo/main/scripts/install-aggo-cli.sh \
+  | sh -s -- \
+  --main-class com.example.db.MigrationsKt \
+  --project-dir /path/to/project \
+  --install-dir /usr/local/bin \
+  --runner maven
 ```
 
 ### 3. Run subcommands
 
-`AggoMigrateTask` exposes a small set of subcommands as the first positional
-argument. With no subcommand, the legacy "generate with optional name" form is
-preserved.
+`AggoMigrateTask` exposes migration commands under the `migrate` command group.
+The older forms (`generate add_orders_table`, `apply`, etc.) are still accepted
+for compatibility.
 
 ```bash
 # Generate a new migration file from current Tables (default)
 mvn compile exec:java
-mvn compile exec:java -Dexec.args="generate add_orders_table"
+mvn compile exec:java -Dexec.args="migrate generate add_orders_table"
+mvn compile exec:java -Dexec.args="migrate generate --name add_orders_table"
 
 # Apply pending migrations against the configured database
-mvn compile exec:java -Dexec.args="apply"
+mvn compile exec:java -Dexec.args="migrate run"
 
 # Show applied vs pending without running anything
-mvn compile exec:java -Dexec.args="status"
+mvn compile exec:java -Dexec.args="migrate status"
 
 # Print the pending SQL to stdout without applying
-mvn compile exec:java -Dexec.args="dry-run"
+mvn compile exec:java -Dexec.args="migrate dry-run"
 
 # Drop every declared table and aggo_schema_versions (dev only by default)
-mvn compile exec:java -Dexec.args="drop"
-mvn compile exec:java -Dexec.args="drop --force"   # bypass prod guard
+mvn compile exec:java -Dexec.args="migrate drop"
+mvn compile exec:java -Dexec.args="migrate drop --force"   # bypass prod guard
 
 # Drop + apply in one shot (e.g. reset a local DB after schema churn)
-mvn compile exec:java -Dexec.args="reset"
+mvn compile exec:java -Dexec.args="migrate reset"
 
 # Print help
-mvn compile exec:java -Dexec.args="help"
+mvn compile exec:java -Dexec.args="migrate help"
+```
+
+Maven projects can install the same Unix launcher:
+
+```bash
+mvn compile exec:java -Dexec.args="migrate install-cli --runner maven"
+
+aggo migrate generate --name add_orders_table
+aggo migrate run
 ```
 
 `generate` produces a `{timestamp}_name.sql` file under `migrationsDir` and
@@ -144,7 +303,7 @@ one of two ways:
 
 | What | Default path | Override via |
 |------|-------------|--------------|
-| Schema snapshot | `target/aggo/snapshot.json` for Maven, `build/aggo/snapshot.json` for Gradle | `-Daggo.snapshotFile=…` or `override val snapshotFile` |
+| Schema snapshot | `src/main/aggo/snapshot.json` | `-Daggo.snapshotFile=…` or `override val snapshotFile` |
 | Migration files | `src/main/resources/aggo/migrations/` | `-Daggo.migrationsDir=…` or `override val migrationsDir` |
 | Version label | _(timestamp only)_ | `-Daggo.name=…` or `args[0]` |
 
@@ -485,6 +644,129 @@ mapping and emit a sized SQL type instead. See the
 [Typed column builders](02-schema.md#typed-column-builders-sized-sql-types)
 section in the schema reference for the full list.
 
+## Notification trigger DDL
+
+`migrationSchema` and `migrationPlan` accept an optional list of
+[`NotifyTrigger`](02-schema.md#notification-triggers--notifytrigger)
+declarations and fold their DDL into the same `MigrationPlan` as tables, FKs,
+and indexes — triggers are created in the same migration, after the tables and
+the outbox table they depend on:
+
+```kotlin
+import com.aggitech.aggo.dialect.PostgresDialect
+import com.aggitech.aggo.dialect.PostgresTriggerDialect
+import com.aggitech.aggo.migration.migrationPlan
+import com.aggitech.aggo.migration.migrationSchema
+
+val schema = migrationSchema(
+    version  = "2026.06.01.001",
+    tables   = listOf(UsersTable, OrdersTable),
+    dialect  = PostgresDialect,
+    triggers = listOf(UserInsertedTrigger, OrderCreatedTrigger),
+)
+
+val plan = migrationPlan(
+    current        = schema,
+    dialect        = PostgresDialect,
+    triggerDialect = PostgresTriggerDialect,
+)
+
+aggo.applyMigration(plan)
+```
+
+Pass `triggerDialect` whenever either schema declares triggers — it renders the
+trigger/function/outbox-table DDL. Omitting it while triggers are present
+throws `IllegalArgumentException` immediately: a configuration error must
+surface at plan-generation time, not produce a plan silently missing trigger
+DDL.
+
+### `TriggerDialect` — per-database trigger DDL
+
+`TriggerDialect` is implemented alongside `MigrationDialect` and encapsulates
+how each database expresses "run this on row change, then notify":
+
+```kotlin
+interface TriggerDialect {
+    fun renderNotifyTriggerDdl(trigger: NotifyTrigger<*>, outboxTableName: String = OUTBOX_TABLE): List<String>
+    fun renderOutboxTableDdl(outboxTableName: String = OUTBOX_TABLE): List<String>
+    fun renderDropTriggerDdl(trigger: NotifyTrigger<*>): List<String>
+}
+```
+
+| Dialect | `renderNotifyTriggerDdl` | `renderOutboxTableDdl` |
+|---------|--------------------------|------------------------|
+| `PostgresTriggerDialect` | `CREATE OR REPLACE FUNCTION` (calls `pg_notify`) + `CREATE TRIGGER ... EXECUTE FUNCTION` | empty — PostgreSQL never needs an outbox |
+| `MySqlTriggerDialect` | one `CREATE TRIGGER` **per declared event** (MySQL cannot bind multiple events to a single trigger), each `INSERT`-ing into the outbox | `CREATE TABLE IF NOT EXISTS aggo_notifications (...)` with an `(channel, id)` index |
+| `OracleTriggerDialect` | a single `CREATE OR REPLACE TRIGGER` covering all events (Oracle does support multi-event triggers), `INSERT`-ing into the outbox | `CREATE TABLE` + `CREATE INDEX` for the outbox |
+
+All three dialects route every identifier through `quoteIdentifier`
+(`requireValidIdentifier`), and channel names through the same allowlist
+`NotifyChannel` enforces — generated trigger bodies never interpolate an
+unvalidated string.
+
+PostgreSQL's generated function looks like this:
+
+```sql
+CREATE OR REPLACE FUNCTION "aggo_notify_trg_notify_user_inserted"() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_notify('user_events', (CASE WHEN TG_OP = 'DELETE'
+        THEN (OLD.id) ELSE (NEW.id) END)::text);
+    RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+DROP TRIGGER IF EXISTS "trg_notify_user_inserted" ON "users";
+CREATE TRIGGER "trg_notify_user_inserted"
+AFTER INSERT ON "users"
+FOR EACH ROW EXECUTE FUNCTION "aggo_notify_trg_notify_user_inserted"();
+```
+
+### Multi-event triggers and row images
+
+`NEW` is unpopulated on `DELETE` and `OLD` is unpopulated on
+`INSERT`/`UPDATE`. A trigger declared with `events = {Insert, Update, Delete}`
+cannot select one row image once and reuse it for every operation — so
+`TriggerDialect` rewrites every `NEW`/`OLD` token in `payloadSql` to the
+reference the firing operation actually provides:
+
+- **PostgreSQL / MySQL**: `CASE WHEN TG_OP = 'DELETE' THEN (<payload with OLD>) ELSE (<payload with NEW>) END` (Postgres), or one trigger per event with the matching reference substituted (MySQL).
+- **Oracle**: `CASE WHEN DELETING THEN (<payload with :OLD>) ELSE (<payload with :NEW>) END`.
+
+You write `payloadSql` once, referencing whichever side reads naturally
+(`"NEW.id"`); the generated DDL is correct for every declared event without
+any extra configuration.
+
+### `pg_notify` and outbox rows are commit-only
+
+`PERFORM pg_notify(...)` inside an `AFTER` trigger only fires on `COMMIT` — a
+rolled-back transaction never reaches a listener. The outbox model preserves
+the same guarantee: the `INSERT` into `aggo_notifications` is part of the
+triggering transaction, so a rollback removes the row before
+`OutboxListener` ever sees it. Both are native database behavior, not
+something Aggo layers on top — see
+[Reactive Notifications](08-notifications.md) for the consumer side
+(`AggoListener`, `OutboxListener`, `Session.notify`).
+
+### Diffing triggers across schema versions
+
+Triggers diff the same way tables do — by `name`, against the previous
+snapshot's `triggers` list:
+
+| Change | Migration step |
+|--------|----------------|
+| New trigger | `CreateTrigger` — full `renderNotifyTriggerDdl` |
+| Changed trigger (any field — they're data classes, compared by full equality) | `CreateTrigger` — idempotent via `CREATE OR REPLACE FUNCTION` / `DROP + CREATE` |
+| Removed trigger | Manual step — "trigger '…' removed — drop manually if safe"; dropping a notification trigger can silently stop downstream listeners |
+| First trigger that needs an outbox (MySQL/Oracle) | `CreateOutboxTable` step, emitted once |
+
+`outboxTableName` (default `OUTBOX_TABLE`, `"aggo_notifications"`) names the
+table MySQL/Oracle triggers write to. Pass the same name to `migrationPlan`,
+to `TriggerDialect.renderOutboxTableDdl` (handled for you when both go through
+`migrationPlan`), and to
+[`OutboxListener`](08-notifications.md#outboxlistener--mysqloracle-outbox-polling)
+— DDL and the runtime poller must agree on which table to use.
+
 ## Supporting other databases
 
 Implement `MigrationDialect` for a different database engine:
@@ -567,11 +849,11 @@ fun main(args: Array<String>) = Migrations.runFromArgs(args)
 Comandos principais:
 
 ```bash
-mvn compile exec:java -Dexec.args="generate add_users"
-mvn compile exec:java -Dexec.args="status"
-mvn compile exec:java -Dexec.args="dry-run"
-mvn compile exec:java -Dexec.args="apply"
-mvn compile exec:java -Dexec.args="reset"
+mvn compile exec:java -Dexec.args="migrate generate add_users"
+mvn compile exec:java -Dexec.args="migrate status"
+mvn compile exec:java -Dexec.args="migrate dry-run"
+mvn compile exec:java -Dexec.args="migrate run"
+mvn compile exec:java -Dexec.args="migrate reset"
 ```
 
 `drop` e `reset` sao destrutivos e recusam rodar em `AGGO_ENV=prod` sem
@@ -593,6 +875,62 @@ object StatusCodec : MigratableCodec<Status> {
     override fun decode(raw: Any?) = (raw as? String)?.let(Status::valueOf)
 }
 ```
+
+### DDL de triggers de notificacao
+
+`migrationSchema` e `migrationPlan` aceitam uma lista opcional de
+[`NotifyTrigger`](02-schema.md#triggers-de-notificacao--notifytrigger) e
+incluem o DDL de funcao/trigger/outbox no mesmo `MigrationPlan` das tabelas —
+na mesma transacao, depois das tabelas e da outbox de que dependem:
+
+```kotlin
+val schema = migrationSchema(
+    version  = "2026.06.01.001",
+    tables   = listOf(UsersTable, OrdersTable),
+    dialect  = PostgresDialect,
+    triggers = listOf(UserInsertedTrigger, OrderCreatedTrigger),
+)
+
+val plan = migrationPlan(schema, PostgresDialect, triggerDialect = PostgresTriggerDialect)
+aggo.applyMigration(plan)
+```
+
+Passe `triggerDialect` sempre que algum dos schemas declarar triggers — sem
+ele, `migrationPlan` lanca `IllegalArgumentException` imediatamente, em vez de
+gerar silenciosamente um plano sem o DDL dos triggers.
+
+`TriggerDialect` e implementado ao lado de `MigrationDialect`:
+
+- **`PostgresTriggerDialect`** gera `CREATE OR REPLACE FUNCTION` (que chama
+  `pg_notify`) + `CREATE TRIGGER ... EXECUTE FUNCTION`. Nunca precisa de outbox.
+- **`MySqlTriggerDialect`** gera um `CREATE TRIGGER` por evento declarado (o
+  MySQL nao aceita multiplos eventos em um unico trigger), cada um inserindo na
+  outbox `aggo_notifications`.
+- **`OracleTriggerDialect`** gera um unico `CREATE OR REPLACE TRIGGER`
+  cobrindo todos os eventos, tambem inserindo na outbox.
+
+Triggers com mais de um evento nao podem fixar `NEW` ou `OLD` — `NEW` fica
+vazio em `DELETE` e `OLD` fica vazio em `INSERT`/`UPDATE`. `TriggerDialect`
+reescreve cada referencia de `payloadSql` para a que a operacao realmente
+popula (`CASE WHEN TG_OP = 'DELETE' ... ELSE ...` no Postgres/MySQL,
+`CASE WHEN DELETING ...` no Oracle), entao a mesma expressao funciona para
+todos os eventos declarados sem configuracao extra.
+
+`pg_notify` dentro de um trigger `AFTER` so dispara em `COMMIT`, e o `INSERT`
+na outbox faz parte da mesma transacao do trigger — em ambos os casos, um
+rollback nunca chega ao listener. Essa e a semantica nativa do banco, nao algo
+que Aggo adiciona. Veja [Notificacoes Reativas](08-notifications.md#notificacoes-reativas-pt)
+para o lado consumidor.
+
+O diff de triggers compara por `name`: novos viram `CreateTrigger`, alterados
+tambem (idempotente via `CREATE OR REPLACE FUNCTION` / `DROP + CREATE`),
+removidos viram um passo manual ("remover manualmente se for seguro" — remover
+um trigger de notificacao pode parar listeners silenciosamente), e a primeira
+vez que algum trigger precisa de outbox gera um passo `CreateOutboxTable`.
+`outboxTableName` (padrao `"aggo_notifications"`) precisa ser o mesmo nome
+passado para `migrationPlan` e para
+[`OutboxListener`](08-notifications.md#outboxlistener--mysqloracle-outbox-polling)
+— DDL e o poller em runtime precisam concordar sobre qual tabela usar.
 
 ### Comparacao com Hibernate
 
