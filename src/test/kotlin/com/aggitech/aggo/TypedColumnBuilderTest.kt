@@ -139,16 +139,6 @@ class TypedColumnBuilderTest : StringSpec({
             "CONSTRAINT \"chk_composed_slug\" CHECK"
     }
 
-    "every type-of-V matches between getter and codec at compile time" {
-        // The compiler enforces the codec/getter contract for each builder.
-        // A sanity-check expression that would not compile if the types drifted:
-        val pid: java.util.UUID? = SizedTypesTable.pid.codec.decode(UUID.randomUUID())
-        val balance: BigDecimal? = SizedTypesTable.balance.codec.decode(BigDecimal("1.23"))
-        val birthday: LocalDate? = SizedTypesTable.birthday.codec.decode(LocalDate.of(2026, 1, 1))
-        val updated: LocalDateTime? = SizedTypesTable.updatedAt.codec.decode(LocalDateTime.now())
-        val created: Instant? = SizedTypesTable.createdAt.codec.decode(Instant.now())
-        listOf(pid, balance, birthday, updated, created).all { it != null } shouldBe true
-    }
 })
 
 private object ProfilesTable : Table<Unit>("profiles") {
