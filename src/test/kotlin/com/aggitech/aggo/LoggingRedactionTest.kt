@@ -13,7 +13,7 @@ import com.aggitech.aggo.schema.IntCodec
 import com.aggitech.aggo.schema.StringCodec
 import com.aggitech.aggo.schema.Table
 import com.aggitech.aggo.dsl.select
-import io.kotest.core.spec.style.StringSpec
+import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
 import io.r2dbc.spi.Row
 
@@ -33,42 +33,55 @@ private object Accounts : Table<Account>("accounts") {
     )
 }
 
-class LoggingRedactionTest : StringSpec({
+class LoggingRedactionTest : BehaviorSpec({
 
-    "V-6: sensitive column has its INSERT bind value redacted in trace logs" {
-        val q = insert(Accounts) {
-            Accounts.email setTo "a@b"
-            Accounts.passwordHash setTo "argon2id\$v=19\$m=65536…"
-            Accounts.nickname setTo "anon"
+    given("a column marked as sensitive") {
+        `when`("its value is bound by an INSERT") {
+            then("only the sensitive value is redacted from logs") {
+                val query = insert(Accounts) {
+                    Accounts.email setTo "a@b"
+                    Accounts.passwordHash setTo "argon2id\$v=19\$m=65536…"
+                    Accounts.nickname setTo "anon"
+                }
+
+                QueryLog.redact(renderInsert(query, PostgresDialect).params) shouldBe
+                    listOf("a@b", "<redacted>", "anon")
+            }
         }
-        val rendered = renderInsert(q, PostgresDialect)
-        val redacted = QueryLog.redact(rendered.params)
-        redacted shouldBe listOf("a@b", "<redacted>", "anon")
+
+        `when`("its value is bound by an UPDATE predicate") {
+            then("the sensitive assignment is redacted and the identifier remains visible") {
+                val query = update(Accounts) {
+                    Accounts.passwordHash setTo "fresh-hash"
+                    where { Accounts.id eq 7 }
+                }
+
+                QueryLog.redact(renderUpdate(query, PostgresDialect).params) shouldBe
+                    listOf("<redacted>", 7)
+            }
+        }
+
+        `when`("it is compared with a literal in a SELECT predicate") {
+            then("the literal is redacted") {
+                val query = select(Accounts) {
+                    where { Accounts.passwordHash eq "secret-pw" }
+                }
+
+                QueryLog.redact(renderSelect(query, PostgresDialect).params) shouldBe listOf("<redacted>")
+            }
+        }
     }
 
-    "V-6: sensitive column has its UPDATE bind value redacted in trace logs" {
-        val q = update(Accounts) {
-            Accounts.passwordHash setTo "fresh-hash"
-            where { Accounts.id eq 7 }
-        }
-        val rendered = renderUpdate(q, PostgresDialect)
-        val redacted = QueryLog.redact(rendered.params)
-        redacted shouldBe listOf("<redacted>", 7)
-    }
+    given("a non-sensitive column whose value contains a security-related word") {
+        `when`("the value is logged") {
+            then("redaction remains metadata-driven and preserves the value") {
+                val query = select(Accounts) {
+                    where { Accounts.nickname eq "anything containing password" }
+                }
 
-    "V-6: predicate `sensitive eq literal` redacts the literal but `non-sensitive eq literal` does not" {
-        val q = select(Accounts) {
-            where { Accounts.passwordHash eq "secret-pw" }
+                QueryLog.redact(renderSelect(query, PostgresDialect).params) shouldBe
+                    listOf("anything containing password")
+            }
         }
-        val rendered = renderSelect(q, PostgresDialect)
-        QueryLog.redact(rendered.params) shouldBe listOf("<redacted>")
-
-        val q2 = select(Accounts) {
-            where { Accounts.nickname eq "anything containing password" }
-        }
-        val rendered2 = renderSelect(q2, PostgresDialect)
-        // Note: under V-6 column-driven redaction, the substring 'password'
-        // in a *non-sensitive* column's value MUST NOT be masked.
-        QueryLog.redact(rendered2.params) shouldBe listOf("anything containing password")
     }
 })

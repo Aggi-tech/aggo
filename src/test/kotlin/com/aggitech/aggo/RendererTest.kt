@@ -61,6 +61,7 @@ import com.aggitech.aggo.render.renderJoinSelect
 import com.aggitech.aggo.render.renderProjectionSelect
 import com.aggitech.aggo.render.renderSelect
 import com.aggitech.aggo.render.renderUpdate
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
@@ -324,11 +325,8 @@ class RendererTest : StringSpec({
         renderSelect(select(People) { limit(0) }, PostgresDialect)
         renderSelect(select(People) { limit(10_000_000) }, PostgresDialect)
 
-        try {
+        shouldThrow<IllegalArgumentException> {
             select(People) { limit(-1) }
-            error("should have thrown")
-        } catch (e: IllegalArgumentException) {
-            // expected
         }
     }
 

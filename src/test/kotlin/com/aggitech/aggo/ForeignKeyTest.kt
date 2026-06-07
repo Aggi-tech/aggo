@@ -7,7 +7,7 @@ import com.aggitech.aggo.schema.ForeignKeyAction
 import com.aggitech.aggo.schema.IntCodec
 import com.aggitech.aggo.schema.StringCodec
 import com.aggitech.aggo.schema.Table
-import io.kotest.core.spec.style.StringSpec
+import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
 import io.r2dbc.spi.Row
@@ -58,51 +58,52 @@ private object LabelsTable : Table<Label>("labels") {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-class ForeignKeyTest : StringSpec({
+class ForeignKeyTest : BehaviorSpec({
 
-    "references() registers the FK on the table" {
-        PurchaseOrdersTable.foreignKeys shouldHaveSize 2
+    given("columns declared with foreign-key references") {
+        `when`("the table metadata is materialized") {
+            then("each relationship preserves its columns and referential actions") {
+                PurchaseOrdersTable.foreignKeys shouldHaveSize 2
+
+                val buyerFk: ForeignKey =
+                    PurchaseOrdersTable.foreignKeys.single { it.column.name == "buyer_id" }
+                buyerFk.column shouldBe PurchaseOrdersTable.buyerId
+                buyerFk.referencedColumn shouldBe BuyersTable.id
+                buyerFk.onDelete shouldBe ForeignKeyAction.CASCADE
+                buyerFk.onUpdate shouldBe ForeignKeyAction.RESTRICT
+
+                val skuFk = PurchaseOrdersTable.foreignKeys.single { it.column.name == "sku_id" }
+                skuFk.onDelete shouldBe ForeignKeyAction.RESTRICT
+                skuFk.onUpdate shouldBe ForeignKeyAction.CASCADE
+            }
+        }
+
+        `when`("constraint names are resolved") {
+            then("generated names are deterministic and explicit names take precedence") {
+                PurchaseOrdersTable.foreignKeys.single { it.column.name == "buyer_id" }.effectiveName shouldBe
+                    "fk_purchase_orders_buyer_id"
+                LabelsTable.foreignKeys.single().effectiveName shouldBe "fk_labels_buyer"
+            }
+        }
+
+        `when`("PostgreSQL migration DDL is generated") {
+            then("each relationship becomes a quoted ALTER TABLE statement with its actions") {
+                PurchaseOrdersTable.addForeignKeyConstraintsSql(PostgresDialect) shouldBe listOf(
+                    """ALTER TABLE "purchase_orders" ADD CONSTRAINT "fk_purchase_orders_buyer_id" """ +
+                        """FOREIGN KEY ("buyer_id") REFERENCES "buyers" ("id") ON DELETE CASCADE ON UPDATE RESTRICT;""",
+                    """ALTER TABLE "purchase_orders" ADD CONSTRAINT "fk_purchase_orders_sku_id" """ +
+                        """FOREIGN KEY ("sku_id") REFERENCES "skus" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;""",
+                )
+            }
+        }
     }
 
-    "FK column and referencedColumn are recorded correctly" {
-        val fk: ForeignKey = PurchaseOrdersTable.foreignKeys.first { it.column.name == "buyer_id" }
-        fk.column shouldBe PurchaseOrdersTable.buyerId
-        fk.referencedColumn shouldBe BuyersTable.id
-    }
-
-    "FK onDelete and onUpdate actions are recorded" {
-        val buyerFk = PurchaseOrdersTable.foreignKeys.first { it.column.name == "buyer_id" }
-        buyerFk.onDelete shouldBe ForeignKeyAction.CASCADE
-        buyerFk.onUpdate shouldBe ForeignKeyAction.RESTRICT
-
-        val skuFk = PurchaseOrdersTable.foreignKeys.first { it.column.name == "sku_id" }
-        skuFk.onDelete shouldBe ForeignKeyAction.RESTRICT
-        skuFk.onUpdate shouldBe ForeignKeyAction.CASCADE
-    }
-
-    "effectiveName defaults to fk_<table>_<column>" {
-        val fk = PurchaseOrdersTable.foreignKeys.first { it.column.name == "buyer_id" }
-        fk.effectiveName shouldBe "fk_purchase_orders_buyer_id"
-    }
-
-    "constraintName overrides the generated name" {
-        val fk = LabelsTable.foreignKeys.first()
-        fk.effectiveName shouldBe "fk_labels_buyer"
-    }
-
-    "addForeignKeyConstraintsSql (migration layer) generates ALTER TABLE with dialect quoting" {
-        val stmts = PurchaseOrdersTable.addForeignKeyConstraintsSql(PostgresDialect)
-        stmts shouldHaveSize 2
-        stmts[0] shouldBe
-            """ALTER TABLE "purchase_orders" ADD CONSTRAINT "fk_purchase_orders_buyer_id" """ +
-            """FOREIGN KEY ("buyer_id") REFERENCES "buyers" ("id") ON DELETE CASCADE ON UPDATE RESTRICT;"""
-        stmts[1] shouldBe
-            """ALTER TABLE "purchase_orders" ADD CONSTRAINT "fk_purchase_orders_sku_id" """ +
-            """FOREIGN KEY ("sku_id") REFERENCES "skus" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;"""
-    }
-
-    "table with no FK references produces no DDL" {
-        BuyersTable.foreignKeys shouldHaveSize 0
-        BuyersTable.addForeignKeyConstraintsSql(PostgresDialect) shouldHaveSize 0
+    given("a table without foreign-key references") {
+        `when`("migration DDL is generated") {
+            then("no foreign-key statement is emitted") {
+                BuyersTable.foreignKeys shouldBe emptyList()
+                BuyersTable.addForeignKeyConstraintsSql(PostgresDialect) shouldBe emptyList()
+            }
+        }
     }
 })
