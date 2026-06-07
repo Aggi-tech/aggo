@@ -60,11 +60,18 @@ object PostgresTriggerDialect : TriggerDialect {
         val events = trigger.events.joinToString(" OR ") { it.name.uppercase() }
         val channel = dialect.requireValidChannelName(trigger.channel.name)
 
+        // DELETE triggers never populate NEW and INSERT/UPDATE triggers never populate
+        // OLD — a multi-event trigger must pick its row image at runtime via TG_OP,
+        // not bake in whichever reference the author happened to write.
+        val payloadExpr = "CASE WHEN TG_OP = 'DELETE' " +
+            "THEN (${rewriteRowImage(trigger.payloadSql, useOld = true)}) " +
+            "ELSE (${rewriteRowImage(trigger.payloadSql, useOld = false)}) END"
+
         val function = """
             CREATE OR REPLACE FUNCTION $fnName() RETURNS trigger
             LANGUAGE plpgsql AS $$
             BEGIN
-                PERFORM pg_notify('$channel', (${trigger.payloadSql})::text);
+                PERFORM pg_notify('$channel', ($payloadExpr)::text);
                 RETURN COALESCE(NEW, OLD);
             END;
             $$;
@@ -113,11 +120,10 @@ object MySqlTriggerDialect : TriggerDialect {
         val timing = trigger.timing.name.uppercase()
         val outbox = dialect.quoteIdentifier(outboxTableName)
         val channel = dialect.requireValidChannelName(trigger.channel.name)
-        val payload = stripRowPrefix(trigger.payloadSql)
 
         return trigger.events.flatMap { event ->
             val name = dialect.quoteIdentifier(eventTriggerName(trigger, event))
-            val row = if (event == TriggerEvent.Delete) "OLD" else "NEW"
+            val payload = rewriteRowImage(trigger.payloadSql, useOld = event == TriggerEvent.Delete)
             listOf(
                 "DROP TRIGGER IF EXISTS $name;",
                 """
@@ -125,7 +131,7 @@ object MySqlTriggerDialect : TriggerDialect {
                 $timing ${event.name.uppercase()} ON $table
                 FOR EACH ROW
                 INSERT INTO $outbox (${dialect.quoteIdentifier("channel")}, ${dialect.quoteIdentifier("payload")}, ${dialect.quoteIdentifier("created_at")})
-                VALUES ('$channel', ($row.$payload), NOW(3));
+                VALUES ('$channel', ($payload), NOW(3));
                 """.trimIndent(),
             )
         }
@@ -172,9 +178,13 @@ object OracleTriggerDialect : TriggerDialect {
         val outbox = dialect.requireValidChannelName(outboxTableName)
         val timing = trigger.timing.name.uppercase()
         val events = trigger.events.joinToString(" OR ") { it.name.uppercase() }
-        val row = if (TriggerEvent.Delete in trigger.events) ":OLD" else ":NEW"
         val channel = dialect.requireValidChannelName(trigger.channel.name)
-        val payload = stripRowPrefix(trigger.payloadSql)
+
+        // :NEW is empty on DELETE and :OLD is empty on INSERT — a combined trigger must
+        // branch on the firing operation (DELETING) rather than always selecting one side.
+        val payloadExpr = "CASE WHEN DELETING " +
+            "THEN (${rewriteRowImage(trigger.payloadSql, useOld = true, rowPrefix = ":")}) " +
+            "ELSE (${rewriteRowImage(trigger.payloadSql, useOld = false, rowPrefix = ":")}) END"
 
         return listOf(
             """
@@ -183,7 +193,7 @@ object OracleTriggerDialect : TriggerDialect {
             FOR EACH ROW
             BEGIN
                 INSERT INTO $outbox (channel, payload, created_at)
-                VALUES ('$channel', $row.$payload, SYSTIMESTAMP);
+                VALUES ('$channel', $payloadExpr, SYSTIMESTAMP);
             END;
             """.trimIndent(),
         )
@@ -212,13 +222,16 @@ object OracleTriggerDialect : TriggerDialect {
 internal const val OUTBOX_TABLE = "aggo_notifications"
 
 /**
- * Strips a leading `NEW.`/`OLD.` from a [NotifyTrigger.payloadSql] expression so it
- * can be re-prefixed with the dialect's row-reference syntax (`NEW.`/`:NEW.`/…).
- * Channel-name validation already guarantees the expression has no quote/semicolon
- * characters that could escape the generated trigger body.
+ * Replays [payloadSql] against the row image the firing operation actually provides:
+ * every `NEW`/`OLD` token is rewritten to `OLD` (when [useOld]) or `NEW`, optionally
+ * carrying a dialect-specific pseudo-record [rowPrefix] (`":"` for Oracle, `""` elsewhere).
+ *
+ * A single trigger body must serve INSERT, UPDATE, and DELETE alike, but `NEW` is
+ * unpopulated on DELETE and `OLD` is unpopulated on INSERT — whichever reference the
+ * author wrote has to be swapped to match the operation that is actually running.
  */
-private fun stripRowPrefix(payloadSql: String): String =
-    payloadSql.removePrefix("NEW.").removePrefix("OLD.")
+private fun rewriteRowImage(payloadSql: String, useOld: Boolean, rowPrefix: String = ""): String =
+    Regex("\\b(?:NEW|OLD)\\b").replace(payloadSql) { rowPrefix + if (useOld) "OLD" else "NEW" }
 
 /**
  * Validates that [name] is safe to splice as a single-quoted SQL string literal

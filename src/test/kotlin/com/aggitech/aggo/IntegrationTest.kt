@@ -254,7 +254,7 @@ class IntegrationTest : FeatureSpec({
         scenario("N-ACC-5: Session.notify delivers only after its transaction commits")
             .config(enabledIf = { dockerAvailable }) {
                 val notification = receiveAfter(listener, ReactiveUserEvents) {
-                    aggo.tx { tx ->
+                    aggo.tx.unsafe { tx ->
                         tx.notify(ReactiveUserEvents, "manual")
                     }
                 }
@@ -268,7 +268,7 @@ class IntegrationTest : FeatureSpec({
                     val first = async { withTimeout(5.seconds) { listener.listen(ReactiveUserEvents).first() } }
                     val second = async { withTimeout(5.seconds) { listener.listen(ReactiveUserEvents).first() } }
                     delay(300.milliseconds)
-                    aggo.tx { tx -> tx.notify(ReactiveUserEvents, "fanout") }
+                    aggo.tx.unsafe { tx -> tx.notify(ReactiveUserEvents, "fanout") }
                     listOf(first.await(), second.await())
                 }
 
@@ -279,7 +279,7 @@ class IntegrationTest : FeatureSpec({
             .config(enabledIf = { dockerAvailable }) {
                 val payload = "x".repeat(8 * 1024)
                 val notification = receiveAfter(listener, ReactiveUserEvents) {
-                    aggo.tx { tx -> tx.notify(ReactiveUserEvents, payload) }
+                    aggo.tx.unsafe { tx -> tx.notify(ReactiveUserEvents, payload) }
                 }
 
                 notification.payload shouldBe payload

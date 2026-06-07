@@ -4,50 +4,60 @@ import com.aggitech.aggo.schema.IntCodec
 import com.aggitech.aggo.schema.StringCodec
 import com.aggitech.aggo.schema.Table
 import io.kotest.assertions.throwables.shouldThrow
-import io.kotest.core.spec.style.StringSpec
+import io.kotest.core.spec.style.BehaviorSpec
 import io.kotest.matchers.shouldBe
 import io.r2dbc.spi.Row
 
 /** V-2: schema-level identifier validation runs at object init, not at render. */
-class SchemaValidationTest : StringSpec({
+class SchemaValidationTest : BehaviorSpec({
 
-    "Table with a non-identifier name throws at construction (V-2)" {
-        shouldThrow<IllegalArgumentException> {
-            object : Table<Any>("bad; DROP TABLE x") {
-                override fun fromRow(row: Row): Any = error("not used")
+    given("schema metadata is created") {
+        `when`("a table name contains SQL injection syntax") {
+            then("construction fails before rendering") {
+                shouldThrow<IllegalArgumentException> {
+                    object : Table<Any>("bad; DROP TABLE x") {
+                        override fun fromRow(row: Row): Any = error("not used")
+                    }
+                }
             }
         }
-    }
 
-    "Table.column with a non-identifier column name throws at construction (V-2)" {
-        shouldThrow<IllegalArgumentException> {
-            object : Table<Any>("good_table") {
-                @Suppress("unused")
-                val col = column("first name", StringCodec) { _: Any -> "x" }
-                override fun fromRow(row: Row): Any = error("not used")
+        `when`("a column name contains whitespace") {
+            then("construction fails before rendering") {
+                shouldThrow<IllegalArgumentException> {
+                    object : Table<Any>("good_table") {
+                        @Suppress("unused")
+                        val col = column("first name", StringCodec) { _: Any -> "x" }
+                        override fun fromRow(row: Row): Any = error("not used")
+                    }
+                }
             }
         }
-    }
 
-    "Table.column with duplicate name throws at construction (V-2)" {
-        shouldThrow<IllegalArgumentException> {
-            object : Table<Any>("dup_table") {
-                @Suppress("unused")
-                val a = column("id", IntCodec) { _: Any -> 1 }
-                @Suppress("unused")
-                val b = column("id", IntCodec) { _: Any -> 2 }
-                override fun fromRow(row: Row): Any = error("not used")
+        `when`("two columns use the same name") {
+            then("construction fails before ambiguous metadata is exposed") {
+                shouldThrow<IllegalArgumentException> {
+                    object : Table<Any>("dup_table") {
+                        @Suppress("unused")
+                        val a = column("id", IntCodec) { _: Any -> 1 }
+                        @Suppress("unused")
+                        val b = column("id", IntCodec) { _: Any -> 2 }
+                        override fun fromRow(row: Row): Any = error("not used")
+                    }
+                }
             }
         }
-    }
 
-    "Valid table and columns construct fine and report the right names" {
-        val t = object : Table<Any>("legit_table") {
-            val one = column("col_one", IntCodec) { _: Any -> 1 }
-            override fun fromRow(row: Row): Any = error("not used")
+        `when`("table and column names are valid and unique") {
+            then("the declared metadata is exposed unchanged") {
+                val table = object : Table<Any>("legit_table") {
+                    val one = column("col_one", IntCodec) { _: Any -> 1 }
+                    override fun fromRow(row: Row): Any = error("not used")
+                }
+
+                table.name shouldBe "legit_table"
+                table.columns.map { it.name } shouldBe listOf("col_one")
+            }
         }
-        t.name shouldBe "legit_table"
-        t.columns.size shouldBe 1
-        t.one.name shouldBe "col_one"
     }
 })
