@@ -5,6 +5,7 @@ import io.r2dbc.spi.ConnectionFactory
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flow
@@ -82,7 +83,7 @@ class AggoListener(
         val connection = connectionFactory.create().awaitSingle() as PostgresqlConnection
         try {
             channelNames.forEach { name ->
-                connection.createStatement("LISTEN \"$name\"").execute().awaitFirstOrNull()
+                connection.createStatement("LISTEN \"$name\"").executeCommand()
             }
             emitAll(
                 connection.notifications.asFlow()
@@ -92,11 +93,17 @@ class AggoListener(
             withContext(NonCancellable) {
                 runCatching {
                     channelNames.forEach { name ->
-                        connection.createStatement("UNLISTEN \"$name\"").execute().awaitFirstOrNull()
+                        connection.createStatement("UNLISTEN \"$name\"").executeCommand()
                     }
                 }
                 connection.close().awaitFirstOrNull()
             }
         }
+    }
+}
+
+private suspend fun io.r2dbc.spi.Statement.executeCommand() {
+    execute().asFlow().collect { result ->
+        result.rowsUpdated.awaitFirstOrNull()
     }
 }

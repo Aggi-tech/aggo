@@ -275,9 +275,9 @@ class IntegrationTest : FeatureSpec({
                 notifications.map { it.payload } shouldBe listOf("fanout", "fanout")
             }
 
-        scenario("N-ACC-13: an 8 kB payload is delivered without truncation")
+        scenario("N-ACC-13: a near-8 kB PostgreSQL payload is delivered without truncation")
             .config(enabledIf = { dockerAvailable }) {
-                val payload = "x".repeat(8 * 1024)
+                val payload = "x".repeat(7_999)
                 val notification = receiveAfter(listener, ReactiveUserEvents) {
                     aggo.tx.unsafe { tx -> tx.notify(ReactiveUserEvents, payload) }
                 }

@@ -2,6 +2,8 @@ package com.aggitech.aggo.notify
 
 import com.aggitech.aggo.runtime.AggoUnsafe
 import com.aggitech.aggo.runtime.Session
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.reactive.asFlow
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 
 /**
@@ -29,5 +31,7 @@ suspend fun <P : Any> Session.notify(channel: NotifyChannel<P>, payload: P?) {
         .createStatement("SELECT pg_notify($1, $2)")
         .bind(0, channel.name)
     if (encoded == null) statement.bindNull(1, String::class.java) else statement.bind(1, encoded)
-    statement.execute().awaitFirstOrNull()
+    statement.execute().asFlow().collect { result ->
+        result.rowsUpdated.awaitFirstOrNull()
+    }
 }
