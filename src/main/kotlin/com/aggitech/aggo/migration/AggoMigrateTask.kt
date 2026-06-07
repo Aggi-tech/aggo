@@ -42,9 +42,9 @@ import java.nio.file.Paths
  * | Command                    | Effect                                                            |
  * |----------------------------|-------------------------------------------------------------------|
  * | `migrate generate [name]`  | Generate a migration file.                                        |
- * | `migrate run`              | Run pending migrations against the configured database.           |
- * | `migrate status`           | List applied vs pending migrations.                               |
- * | `migrate dry-run`          | Print pending migration SQL without applying.                     |
+ * | `migrate run --migration-file PATH` | Run one migration file against the configured database.    |
+ * | `migrate status --migration-file PATH` | Show whether one migration file is applied.              |
+ * | `migrate dry-run --migration-file PATH` | Print migration SQL without applying.                    |
  * | `migrate install-cli`      | Install a Unix launcher, usually `~/.local/bin/aggo`.             |
  * | `migrate drop`             | Drop every declared table plus `aggo_schema_versions`.            |
  * | `migrate reset`            | `drop` followed by `run`.                                         |
@@ -54,9 +54,9 @@ import java.nio.file.Paths
  *
  * ```bash
  * mvn compile exec:java -Dexec.args="migrate generate add_orders_table"
- * mvn compile exec:java -Dexec.args="migrate run"
- * mvn compile exec:java -Dexec.args="migrate status"
- * mvn compile exec:java -Dexec.args="migrate dry-run"
+ * mvn compile exec:java -Dexec.args="migrate run --migration-file src/main/resources/aggo/migrations/2026.sql"
+ * mvn compile exec:java -Dexec.args="migrate status --migration-file src/main/resources/aggo/migrations/2026.sql"
+ * mvn compile exec:java -Dexec.args="migrate dry-run --migration-file src/main/resources/aggo/migrations/2026.sql"
  * mvn compile exec:java -Dexec.args="migrate install-cli --runner maven"
  * mvn compile exec:java -Dexec.args="migrate drop --force"
  * mvn compile exec:java -Dexec.args="migrate reset --force"

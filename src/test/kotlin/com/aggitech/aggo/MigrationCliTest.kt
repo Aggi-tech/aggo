@@ -62,10 +62,10 @@ class MigrationCliTest : StringSpec({
         out shouldContain "AGGO_ENV"
     }
 
-    "dry-run prints SQL bodies of all on-disk migrations without DB access" {
+    "dry-run prints the SQL body from the required migration file without DB access" {
         val tmp = Files.createTempDirectory("aggo-cli-dryrun")
         val migDir = Files.createDirectories(tmp.resolve("migrations"))
-        writeMigrationFile(
+        val migrationFile = writeMigrationFile(
             MigrationFileEntry(
                 version = "2026.05.26.000001",
                 fromVersion = null,
@@ -80,16 +80,16 @@ class MigrationCliTest : StringSpec({
         )
 
         val task = TestTask(tmp.resolve("snapshot.json"), migDir)
-        val out = captureStdout { task.runFromArgs(arrayOf("dry-run")) }
+        val out = captureStdout { task.runFromArgs(arrayOf("dry-run", "--migration-file", migrationFile.toString())) }
         out shouldContain "2026.05.26.000001"
         out shouldContain "CREATE TABLE \"mini\""
     }
 
-    "dry-run reports gracefully when migrations directory is empty" {
+    "dry-run requires --migration-file" {
         val tmp = Files.createTempDirectory("aggo-cli-empty")
         val task = TestTask(tmp.resolve("snapshot.json"), tmp.resolve("migrations"))
-        val out = captureStdout { task.runFromArgs(arrayOf("dry-run")) }
-        out shouldContain "No migration files"
+        val ex = shouldThrow<IllegalStateException> { task.runFromArgs(arrayOf("dry-run")) }
+        ex.message!! shouldContain "--migration-file is required"
     }
 
     "drop subcommand without --force is refused when environment=prod" {
@@ -161,11 +161,11 @@ class MigrationCliTest : StringSpec({
         files.single().fileName.toString() shouldContain "add_events"
     }
 
-    "migrate run reports empty migration directory without DB access" {
+    "migrate run requires --migration-file before DB access" {
         val tmp = Files.createTempDirectory("aggo-cli-migrate-run")
         val task = TestTask(tmp.resolve("snapshot.json"), tmp.resolve("migrations"))
-        val out = captureStdout { task.runFromArgs(arrayOf("migrate", "run")) }
-        out shouldContain "No migration files"
+        val ex = shouldThrow<IllegalStateException> { task.runFromArgs(arrayOf("migrate", "run")) }
+        ex.message!! shouldContain "--migration-file is required"
     }
 
     "migrate install-cli writes an executable Unix launcher using aggoCliRun by default" {
@@ -192,8 +192,37 @@ class MigrationCliTest : StringSpec({
         val launcher = bin.resolve("aggo")
         Files.exists(launcher) shouldBe true
         launcher.toFile().canExecute() shouldBe true
-        launcher.readText() shouldContain "cd '$project'"
+        launcher.readText() shouldContain "start_dir=\"\${AGGO_PROJECT_DIR:-\$(pwd)}\""
+        launcher.readText() shouldContain "find_project_root"
         launcher.readText() shouldContain "exec ./gradlew -q ':aggoCliRun' --args=\"\$*\""
+        launcher.readText() shouldContain "exec gradle -q ':aggoCliRun' --args=\"\$*\""
+    }
+
+    "migrate install-cli auto-detects a Gradle root above the requested project directory" {
+        val tmp = Files.createTempDirectory("aggo-cli-install-gradle-root")
+        val bin = Files.createDirectories(tmp.resolve("bin"))
+        val project = Files.createDirectories(tmp.resolve("project"))
+        val srcDir = Files.createDirectories(project.resolve("infrastructure/src"))
+        Files.writeString(project.resolve("build.gradle.kts"), "")
+        val task = TestTask(tmp.resolve("snapshot.json"), tmp.resolve("migrations"))
+
+        captureStdout {
+            task.runFromArgs(
+                arrayOf(
+                    "migrate",
+                    "install-cli",
+                    "--dir",
+                    bin.toString(),
+                    "--project-dir",
+                    srcDir.toString(),
+                )
+            )
+        }
+
+        val launcher = bin.resolve("aggo")
+        Files.exists(launcher) shouldBe true
+        launcher.readText() shouldContain "start_dir=\"\${AGGO_PROJECT_DIR:-\$(pwd)}\""
+        launcher.readText() shouldContain "exec gradle -q ':aggoCliRun' --args=\"\$*\""
     }
 
     "migrate install-cli allows overriding the Gradle task" {
@@ -222,8 +251,9 @@ class MigrationCliTest : StringSpec({
         val launcher = bin.resolve("aggo")
         Files.exists(launcher) shouldBe true
         launcher.toFile().canExecute() shouldBe true
-        launcher.readText() shouldContain "cd '$project'"
+        launcher.readText() shouldContain "start_dir=\"\${AGGO_PROJECT_DIR:-\$(pwd)}\""
         launcher.readText() shouldContain "exec ./gradlew -q ':infrastructure:aggo' --args=\"\$*\""
+        launcher.readText() shouldContain "exec gradle -q ':infrastructure:aggo' --args=\"\$*\""
         out shouldContain "Installed Aggo CLI"
     }
 
