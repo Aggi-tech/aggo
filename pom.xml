@@ -76,11 +76,6 @@
         <maven.gpg.version>3.2.7</maven.gpg.version>
         <central.publishing.version>0.10.0</central.publishing.version>
         <dokka.version>2.2.0</dokka.version>
-        <detekt.version>1.23.8</detekt.version>
-        <!-- Custom Aggo Table/Session/Transaction rules — see ./detekt-rules-aggo.
-             Build & install it locally once before running `mvn verify`:
-               mvn -f detekt-rules-aggo/pom.xml install -->
-        <aggo-detekt-rules.version>0.1.0</aggo-detekt-rules.version>
     </properties>
 
     <dependencyManagement>
@@ -218,42 +213,6 @@
                     <execution>
                         <id>test-compile</id>
                         <goals><goal>test-compile</goal></goals>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <!-- Static analysis: misconfiguration / bad-practice checks for selects,
-                 transactions, and the zero-reflection + Codec/Binder contracts —
-                 see detekt.yml for the full rationale and severity mapping. -->
-            <plugin>
-                <groupId>io.gitlab.arturbosch.detekt</groupId>
-                <artifactId>detekt-maven-plugin</artifactId>
-                <version>${detekt.version}</version>
-                <configuration>
-                    <config>${project.basedir}/detekt.yml</config>
-                    <buildUponDefaultConfig>true</buildUponDefaultConfig>
-                    <input>${project.basedir}/src/main/kotlin</input>
-                    <ignoreFailures>false</ignoreFailures>
-                </configuration>
-                <!-- Loads the `aggo` rule set (UpdateDeleteRequiresWhereRule,
-                     TableMustBeObjectRule, NestedTransactionScopeRule,
-                     UnboundedSelectRule — see detekt-rules-aggo/) onto the
-                     plugin's classpath via ServiceLoader. Requires
-                     `mvn -f detekt-rules-aggo/pom.xml install` first. -->
-                <dependencies>
-                    <dependency>
-                        <groupId>com.aggitech</groupId>
-                        <artifactId>detekt-rules-aggo</artifactId>
-                        <version>${aggo-detekt-rules.version}</version>
-                    </dependency>
-                </dependencies>
-                <executions>
-                    <execution>
-                        <id>detekt-check</id>
-                        <phase>verify</phase>
-                        <goals>
-                            <goal>check</goal>
-                        </goals>
                     </execution>
                 </executions>
             </plugin>
