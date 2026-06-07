@@ -90,6 +90,15 @@ interface SessionScope {
     suspend fun <E> fetchAggregate(table: Table<E>, block: AggregateBuilder<E>.() -> Unit): List<AggRow>
     fun <E> streamAggregate(query: AggregateSelect<E>): Flow<AggRow>
     fun <E> streamAggregate(table: Table<E>, block: AggregateBuilder<E>.() -> Unit): Flow<AggRow>
+
+    /**
+     * Returns the JSON snapshot stored for the most recently applied migration version,
+     * or `null` if no snapshot has been recorded yet (fresh DB, or DB predates snapshot support).
+     *
+     * Used by [AggoMigrateTask] so `generate` always diffs against the authoritative DB state
+     * rather than a local file that may have been deleted by a build-tool clean.
+     */
+    suspend fun readLatestSnapshot(): String?
 }
 
 /**
@@ -115,4 +124,14 @@ interface TransactionScope : SessionScope {
     suspend fun applyMigrations(entries: List<MigrationFileEntry>): List<MigrationResult>
     suspend fun applyMigrations(migrationsDir: Path): List<MigrationResult> =
         applyMigrations(readMigrationFiles(migrationsDir))
+
+    /**
+     * Persists [snapshotJson] (a [com.aggitech.aggo.migration.MigrationSchema] serialised with
+     * [com.aggitech.aggo.migration.toJson]) into the `snapshot` column of the
+     * `aggo_schema_versions` row identified by [version].
+     *
+     * Call this after [applyMigrations] so the DB remains the authoritative snapshot source and
+     * a subsequent `generate` always diffs against the actual applied state.
+     */
+    suspend fun storeSnapshot(version: String, snapshotJson: String)
 }

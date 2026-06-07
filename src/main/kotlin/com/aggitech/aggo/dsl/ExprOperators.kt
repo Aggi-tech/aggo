@@ -226,6 +226,33 @@ fun <V> Expr<V>.isNull(): Predicate = Predicate.IsNull(operand, negated = false)
 /** `IS NOT NULL` on an expression result. */
 fun <V> Expr<V>.isNotNull(): Predicate = Predicate.IsNull(operand, negated = true)
 
+// ─── Cross-expression comparisons (Expr vs Expr, Column vs Expr) ──────────────
+
+/**
+ * Compare two expression results directly — e.g. `dateTrunc(...) eq dateTrunc(...)`,
+ * or a column shifted by an interval against [com.aggitech.aggo.dsl.now]:
+ *
+ * ```kotlin
+ * where { Sessions.expiresAt lt now() }
+ * where { (Orders.shippedAt) gt (Orders.placedAt) }
+ * where { Orders.placedAt.plusInterval(30, IntervalUnit.DAY) lt now() }
+ * ```
+ */
+infix fun <V> Expr<V>.eq(other: Expr<V>): Predicate = Predicate.Cmp(operand, ComparisonOp.EQ, other.operand)
+infix fun <V> Expr<V>.ne(other: Expr<V>): Predicate = Predicate.Cmp(operand, ComparisonOp.NE, other.operand)
+infix fun <V : Comparable<V>> Expr<V>.gt(other: Expr<V>): Predicate = Predicate.Cmp(operand, ComparisonOp.GT, other.operand)
+infix fun <V : Comparable<V>> Expr<V>.gte(other: Expr<V>): Predicate = Predicate.Cmp(operand, ComparisonOp.GTE, other.operand)
+infix fun <V : Comparable<V>> Expr<V>.lt(other: Expr<V>): Predicate = Predicate.Cmp(operand, ComparisonOp.LT, other.operand)
+infix fun <V : Comparable<V>> Expr<V>.lte(other: Expr<V>): Predicate = Predicate.Cmp(operand, ComparisonOp.LTE, other.operand)
+
+/** Compare a bare column directly against an expression result, e.g. `Sessions.expiresAt lt now()`. */
+infix fun <E, V> Column<E, V>.eq(expr: Expr<V>): Predicate = Predicate.Cmp(Operand.Col(this), ComparisonOp.EQ, expr.operand)
+infix fun <E, V> Column<E, V>.ne(expr: Expr<V>): Predicate = Predicate.Cmp(Operand.Col(this), ComparisonOp.NE, expr.operand)
+infix fun <E, V : Comparable<V>> Column<E, V>.gt(expr: Expr<V>): Predicate = Predicate.Cmp(Operand.Col(this), ComparisonOp.GT, expr.operand)
+infix fun <E, V : Comparable<V>> Column<E, V>.gte(expr: Expr<V>): Predicate = Predicate.Cmp(Operand.Col(this), ComparisonOp.GTE, expr.operand)
+infix fun <E, V : Comparable<V>> Column<E, V>.lt(expr: Expr<V>): Predicate = Predicate.Cmp(Operand.Col(this), ComparisonOp.LT, expr.operand)
+infix fun <E, V : Comparable<V>> Column<E, V>.lte(expr: Expr<V>): Predicate = Predicate.Cmp(Operand.Col(this), ComparisonOp.LTE, expr.operand)
+
 // ─── Aggregate functions ───────────────────────────────────────────────────────
 
 /**

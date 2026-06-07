@@ -1,8 +1,11 @@
 package com.aggitech.aggo.migration
 
 import com.aggitech.aggo.dialect.MigrationDialect
+import com.aggitech.aggo.dialect.OUTBOX_TABLE
 import com.aggitech.aggo.dialect.SqlDialect
+import com.aggitech.aggo.dialect.TriggerDialect
 import com.aggitech.aggo.schema.MigratableCodec
+import com.aggitech.aggo.schema.NotifyTrigger
 import com.aggitech.aggo.schema.Table
 
 /**
@@ -56,6 +59,8 @@ data class MigrationSchema(
     val version: String,
     val tables: List<MigrationTable>,
     val customTypes: List<MigrationCustomType> = emptyList(),
+    /** Notification triggers tracked alongside this schema version — see [NotifyTrigger]. */
+    val triggers: List<NotifyTrigger<*>> = emptyList(),
 ) {
     init {
         require(SCHEMA_VERSION_REGEX.matches(version)) {
@@ -66,6 +71,9 @@ data class MigrationSchema(
         }
         require(customTypes.map { it.name }.toSet().size == customTypes.size) {
             "duplicate custom type in migration schema"
+        }
+        require(triggers.map { it.name }.toSet().size == triggers.size) {
+            "duplicate trigger in migration schema"
         }
     }
 }
@@ -195,9 +203,10 @@ fun Table<*>.toMigrationTable(dialect: MigrationDialect): MigrationTable =
             )
         },
         checks = columns.flatMap { col ->
-            col.checkConstraints.map { check ->
+            val constraints = col.checkConstraints
+            constraints.mapIndexed { index, check ->
                 MigrationCheck(
-                    name = check.effectiveName(name, col.name),
+                    name = check.effectiveName(name, col.name, index, constraints.size),
                     expression = check.expression(col.name),
                 )
             }
@@ -237,6 +246,7 @@ fun migrationSchema(
     version: String,
     tables: Iterable<Table<*>>,
     dialect: MigrationDialect,
+    triggers: Iterable<NotifyTrigger<*>> = emptyList(),
 ): MigrationSchema {
     val tableList = tables.toList()
     val customTypes = tableList
@@ -251,6 +261,7 @@ fun migrationSchema(
         version = version,
         tables = tableList.map { it.toMigrationTable(dialect) },
         customTypes = customTypes,
+        triggers = triggers.toList(),
     )
 }
 
@@ -261,12 +272,24 @@ fun migrationSchema(
  * every table. With [previous], it emits safe additive SQL and records manual
  * steps for destructive or data-sensitive changes such as type changes, drops,
  * new `NOT NULL` columns, and primary-key rewrites.
+ *
+ * Pass [triggerDialect] when either schema declares [NotifyTrigger]s — it renders
+ * the trigger/function/outbox-table DDL. Omitting it while triggers are present
+ * throws [IllegalArgumentException]; this is a configuration error that must
+ * surface immediately, not produce a plan silently missing trigger DDL.
+ *
+ * [outboxTableName] overrides the managed outbox table's name for dialects that
+ * need one (MySQL/Oracle — see [TriggerDialect.renderOutboxTableDdl]). Pass the
+ * same name to [com.aggitech.aggo.notify.OutboxListener] so the generated DDL
+ * and the runtime poller agree on which table to use.
  */
 fun migrationPlan(
     current: MigrationSchema,
     dialect: MigrationDialect,
     previous: MigrationSchema? = null,
     ifNotExists: Boolean = false,
+    triggerDialect: TriggerDialect? = null,
+    outboxTableName: String = OUTBOX_TABLE,
 ): MigrationPlan {
     // Custom type steps come first — types must exist before CREATE TABLE references them.
     val customTypeSteps = diffCustomTypes(
@@ -327,7 +350,20 @@ fun migrationPlan(
         indexSteps = emptyList()  // index diffs are handled inside diffSchemas → diffTable
     }
 
-    return MigrationPlan(previous?.version, current.version, customTypeSteps + tableSteps + fkSteps + indexSteps)
+    // Triggers come last — their DDL references tables (and, for MySQL/Oracle, the
+    // outbox table) that earlier steps must have already created.
+    val triggerSteps = diffTriggers(
+        previous = previous?.triggers ?: emptyList(),
+        current = current.triggers,
+        triggerDialect = triggerDialect,
+        outboxTableName = outboxTableName,
+    )
+
+    return MigrationPlan(
+        previous?.version,
+        current.version,
+        customTypeSteps + tableSteps + fkSteps + indexSteps + triggerSteps,
+    )
 }
 
 /**
@@ -457,6 +493,10 @@ private fun diffSchemas(
     ifNotExists: Boolean = false,
 ): List<MigrationStep> {
     val steps = mutableListOf<MigrationStep>()
+    // FK and index steps for brand-new tables must come after ALL CREATE TABLE steps
+    // to avoid forward-reference failures when multiple tables reference each other.
+    val newTableFkSteps = mutableListOf<MigrationStep>()
+    val newTableIndexSteps = mutableListOf<MigrationStep>()
     val previousTables = previous.tables.associateBy { it.name }
     val currentTables = current.tables.associateBy { it.name }
 
@@ -473,6 +513,30 @@ private fun diffSchemas(
                     reverseSql = table.dropTableSql(dialect, ifExists = true),
                 ),
             )
+            for (fk in table.foreignKeys) {
+                newTableFkSteps += MigrationStep(
+                    change = "add foreign key ${table.name}.${fk.name}",
+                    sql = buildFkAlterTable(table.name, fk, dialect),
+                    audit = audit(
+                        operation = "add",
+                        targetType = "foreign key",
+                        targetName = "${table.name}.${fk.name}",
+                        reverseSql = dropConstraintSql(table.name, fk.name, dialect),
+                    ),
+                )
+            }
+            for (idx in table.indexes) {
+                newTableIndexSteps += MigrationStep(
+                    change = "create index ${table.name}.${idx.name}",
+                    sql = buildIndexSql(table.name, idx, dialect),
+                    audit = audit(
+                        operation = "create",
+                        targetType = "index",
+                        targetName = "${table.name}.${idx.name}",
+                        reverseSql = dropIndexSql(idx.name, dialect),
+                    ),
+                )
+            }
         } else {
             steps += diffTable(oldTable, table, dialect)
         }
@@ -494,7 +558,7 @@ private fun diffSchemas(
         }
     }
 
-    return steps
+    return steps + newTableFkSteps + newTableIndexSteps
 }
 
 private fun diffTable(
@@ -889,6 +953,97 @@ private fun diffCustomTypes(
                     targetName = type.name,
                     reversible = false,
                     note = "Dropping a custom type can break dependent columns or data.",
+                ),
+            )
+        }
+    }
+
+    return steps
+}
+
+/**
+ * Diffs [NotifyTrigger] declarations between schema versions, emitting:
+ *  - an outbox-table creation step the first time any trigger needs one
+ *    (PostgreSQL's [TriggerDialect.renderOutboxTableDdl] returns an empty list,
+ *    so this is a no-op there),
+ *  - one [MigrationStep] per DDL statement for new or changed triggers
+ *    (idempotent — `CREATE OR REPLACE FUNCTION` / `DROP TRIGGER IF EXISTS`),
+ *  - a manual, irreversible drop step for triggers removed from [current].
+ *
+ * Triggers are compared by full equality (they're data classes), so any field
+ * change — channel, payload, events, timing — re-renders the full DDL.
+ *
+ * Mirrors the existing flat [MigrationStep]/[MigrationAudit] shape used by
+ * [diffCustomTypes] and `diffTable`'s FK/index/check diffs — trigger DDL is
+ * purely additive to that model, not a new [MigrationStep] variant.
+ */
+private fun diffTriggers(
+    previous: List<NotifyTrigger<*>>,
+    current: List<NotifyTrigger<*>>,
+    triggerDialect: TriggerDialect?,
+    outboxTableName: String,
+): List<MigrationStep> {
+    if (previous.isEmpty() && current.isEmpty()) return emptyList()
+
+    requireNotNull(triggerDialect) {
+        "Schema declares NotifyTrigger(s) but no TriggerDialect was supplied to migrationPlan()."
+    }
+
+    val steps = mutableListOf<MigrationStep>()
+    val previousMap = previous.associateBy { it.name }
+    val currentMap = current.associateBy { it.name }
+
+    val outboxDdl = triggerDialect.renderOutboxTableDdl(outboxTableName)
+    val hadOutbox = previous.isNotEmpty() && outboxDdl.isNotEmpty()
+    val needsOutbox = current.isNotEmpty() && outboxDdl.isNotEmpty()
+    if (needsOutbox && !hadOutbox) {
+        outboxDdl.forEach { sql ->
+            steps += MigrationStep(
+                change = "create outbox table $outboxTableName",
+                sql = sql,
+                audit = audit(
+                    operation = "create",
+                    targetType = "outbox table",
+                    targetName = outboxTableName,
+                    reverseSql = "DROP TABLE IF EXISTS $outboxTableName;",
+                ),
+            )
+        }
+    }
+
+    for (trigger in current) {
+        val old = previousMap[trigger.name]
+        if (old == null || old != trigger) {
+            triggerDialect.renderNotifyTriggerDdl(trigger, outboxTableName).forEach { sql ->
+                steps += MigrationStep(
+                    change = if (old == null) {
+                        "create trigger ${trigger.name}"
+                    } else {
+                        "update trigger ${trigger.name}"
+                    },
+                    sql = sql,
+                    audit = audit(
+                        operation = if (old == null) "create" else "alter",
+                        targetType = "trigger",
+                        targetName = trigger.name,
+                        reverseSql = triggerDialect.renderDropTriggerDdl(trigger).joinToString("\n"),
+                    ),
+                )
+            }
+        }
+    }
+
+    for (trigger in previous) {
+        if (trigger.name !in currentMap) {
+            steps += MigrationStep(
+                change = "trigger '${trigger.name}' removed — drop manually if safe",
+                requiresManualMigration = true,
+                audit = audit(
+                    operation = "drop",
+                    targetType = "trigger",
+                    targetName = trigger.name,
+                    reversible = false,
+                    note = "Dropping a notification trigger can silently stop downstream listeners.",
                 ),
             )
         }

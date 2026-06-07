@@ -1,0 +1,288 @@
+### Aggo static-analysis policy ###############################################
+#
+# Detekt groups issues by rule set, and that grouping is our error/warning
+# gradient — mapped onto the contracts in CLAUDE.md ("Core contracts" and
+# "What NOT to do"):
+#
+#   ERROR-grade   (weight 3 — must stay at zero)
+#     potential-bugs, exceptions, coroutines, empty-blocks
+#     → these guard correctness: zero-reflection (#1), the Codec/Binder
+#       boundary (#2, "Binder — null safety contract"), Session-bound-to-one-
+#       Connection (#5, "never cache a Session across suspension points"),
+#       and tx() rollback semantics (#6, "rollback errors must not mask the
+#       original exception").
+#
+#   WARNING-grade (weight 1 — tolerated up to `build.maxIssues`)
+#     complexity, style, performance, naming
+#     → readability and hot-path nits in the select/aggregate DSL builders
+#       and the render/runtime pipeline. Worth fixing, not worth blocking on.
+#
+# Run:   mvn detekt:check
+# Baseline / suppress an existing finding: mvn detekt:baseline
+################################################################################
+
+build:
+  maxIssues: 20
+  excludeCorrectable: false
+  weights:
+    aggo: 3
+    potential-bugs: 3
+    exceptions: 3
+    coroutines: 3
+    empty-blocks: 2
+    complexity: 1
+    style: 1
+    performance: 1
+    naming: 1
+    comments: 1
+
+config:
+  validation: true
+  warningsAsErrors: false
+
+processors:
+  active: true
+
+console-reports:
+  active: true
+
+# ─── aggo — Table/Session/Transaction contracts (custom rule set) ────────────
+# Sourced from ./detekt-rules-aggo — build & install it once before running
+# `mvn verify` here:  mvn -f detekt-rules-aggo/pom.xml install
+#
+# These are PSI-aware checks the generic rule sets below cannot express —
+# they read the actual Aggo DSL shape (update/delete/select builder blocks,
+# Table superclass declarations, tx/read nesting) rather than just method or
+# import names. All but one are Defect (ERROR-grade); UnboundedSelectRule is
+# Warning-grade and suppressible per call site.
+#
+#   UpdateDeleteRequiresWhereRule — update { } / delete { } with no where { }
+#                                   wipes the whole table (Defect).
+#   TableMustBeObjectRule         — Table<E> declared as `class` instead of
+#                                   `object` breaks the singleton/thread-safety
+#                                   contract (Defect).
+#   NestedTransactionScopeRule    — tx { } / read { } nested inside another
+#                                   tx { } / read { } can deadlock the pool or
+#                                   silently split work across transactions
+#                                   (Defect).
+#   UnboundedSelectRule           — select { } with neither where { } nor
+#                                   limit(...) loads the whole table into
+#                                   memory (Warning, @Suppress-able).
+aggo:
+  active: true
+  UpdateDeleteRequiresWhereRule:
+    active: true
+  TableMustBeObjectRule:
+    active: true
+  NestedTransactionScopeRule:
+    active: true
+  UnboundedSelectRule:
+    active: true
+
+# ─── potential-bugs — correctness risks (ERROR-grade) ────────────────────────
+# `MissingWhenCase` directly enforces the pattern CLAUDE.md prescribes for
+# extending `Predicate`/`Operand`/`Query`: "the `when` is exhaustive, so the
+# compiler will flag any missing branch" — this rule catches the same gap in
+# `when` expressions over plain enums/sealed types that the compiler allows
+# to fall through via an `else` someone added carelessly.
+potential-bugs:
+  active: true
+  IgnoredReturnValue:
+    active: true
+  UnsafeCallOnNullableType:
+    active: true
+  UnsafeCast:
+    active: true
+  UnreachableCatchBlock:
+    active: true
+  ImplicitDefaultLocale:
+    active: true
+  MissingWhenCase:
+    active: true
+    allowElseExpression: false
+  NullableToStringCall:
+    active: true
+  DontDowncastCollectionTypes:
+    active: true
+
+# ─── exceptions — transaction-safety (ERROR-grade) ───────────────────────────
+# `Aggo.tx { }` commits on success and rolls back on throw; rollback failures
+# are `addSuppressed()`, never rethrown, "so callers rely on catching the
+# original exception type" (Core contract #6). Each rule below targets one of
+# the classic ways a `tx { }` / `read { }` body — or `Session` method — can
+# silently rewrite or discard the real failure.
+exceptions:
+  active: true
+  TooGenericExceptionCaught:
+    active: true
+    allowedExceptionNameRegex: '_|(ignore|expected).*'
+  SwallowedException:
+    active: true
+    ignoredExceptionTypes:
+      - InterruptedException
+      - NumberFormatException
+      - ParseException
+      - MalformedURLException
+    allowedExceptionNameRegex: '_|(ignore|expected).*'
+  RethrowCaughtException:
+    active: true
+  PrintStackTrace:
+    active: true
+  ThrowingExceptionsWithoutMessageOrCause:
+    active: true
+  ThrowingExceptionFromFinally:
+    active: true
+  TooGenericExceptionThrown:
+    active: true
+  ObjectExtendsThrowable:
+    active: true
+  NotImplementedDeclaration:
+    active: true
+
+# ─── coroutines — Session/connection lifetime (ERROR-grade) ──────────────────
+# Backs Core contract #5: "Session is bound to one Connection... Never cache
+# a Session across coroutine suspension points outside the lambda. Never
+# store a Connection reference outside Session." A `GlobalScope.launch` or a
+# bare `Thread.sleep` inside `aggo.read {}` / `aggo.tx {}` is exactly the kind
+# of thing that leaks a connection past the lambda's lifetime.
+coroutines:
+  active: true
+  GlobalCoroutineUsage:
+    active: true
+  InjectDispatcher:
+    active: false # Aggo's Pool/Aggo own dispatcher selection deliberately — not a leak risk here.
+  RedundantSuspendModifier:
+    active: true
+  SleepInsteadOfDelay:
+    active: true
+  SuspendFunWithFlowReturnType:
+    active: true
+
+# ─── empty-blocks — silently-discarded failures (ERROR-grade) ────────────────
+# An empty `catch` wrapping `aggo.tx { }` / `session.insert(...)` discards the
+# very exception the transaction model exists to propagate; an empty
+# `finally` around connection release defeats "Release (close proxy) in
+# finally — always, even on rollback error."
+empty-blocks:
+  active: true
+  EmptyCatchBlock:
+    active: true
+    allowedExceptionNameRegex: '_|(ignore|expected).*'
+  EmptyFinallyBlock:
+    active: true
+  EmptyFunctionBlock:
+    active: true
+    ignoreOverridden: true
+
+# ─── style — forbidden APIs & import hygiene (WARNING-grade, but see below) ──
+# `ForbiddenMethodCall` / `ForbiddenImport` are configured straight from the
+# CLAUDE.md "What NOT to do" table — these specific entries are effectively
+# ERROR-grade in intent (each documents a contract violation with its CLAUDE.md
+# citation) even though they live in the `style` rule set for tooling reasons.
+style:
+  active: true
+  ForbiddenMethodCall:
+    active: true
+    methods:
+      - reason: 'raw SQL via session.executeRaw() bypasses Codec safety and risks injection — use the Aggo DSL builders (select/insert/update/delete) instead (CLAUDE.md "What NOT to do")'
+        value: 'com.aggitech.aggo.runtime.Session.executeRaw'
+      - reason: 'jOOQ-style plainSQL()/dsl.execute() bypasses the query AST + render pipeline — compose queries with the Aggo DSL instead (CLAUDE.md "What NOT to do")'
+        value: 'plainSQL'
+      - reason: 'bind parameters only through Binder — calling Statement.bind() directly breaks null handling and ValueClassCodec unwrapping (CLAUDE.md "Binder — null safety contract" / "What NOT to do")'
+        value: 'io.r2dbc.spi.Statement.bind'
+      - reason: 'route logging through the Logging facade so bound parameters can be redacted via Column.sensitive — println leaks raw values to stdout/logs'
+        value: 'kotlin.io.println'
+      - reason: 'route logging through the Logging facade so bound parameters can be redacted via Column.sensitive — print leaks raw values to stdout/logs'
+        value: 'kotlin.io.print'
+  ForbiddenImport:
+    active: true
+    imports:
+      - reason: 'zero-reflection contract — KClass/reflection at runtime breaks GraalVM native-image builds (CLAUDE.md Core contract #1: "Zero reflection")'
+        value: 'kotlin.reflect.*'
+      - reason: 'zero-reflection contract — java.lang.reflect breaks GraalVM native-image builds (CLAUDE.md Core contract #1: "Zero reflection")'
+        value: 'java.lang.reflect.*'
+  ForbiddenComment:
+    active: true
+    comments:
+      - reason: 'replace FIXME markers with a tracked issue before merging — schema/query/render/runtime are load-bearing layers that should not ship known-broken code'
+        value: 'FIXME:'
+  MagicNumber:
+    active: true
+    ignorePropertyDeclaration: true
+    ignoreLocalVariableDeclaration: false
+    ignoreConstantDeclaration: true
+    ignoreCompanionObjectPropertyDeclaration: true
+    ignoreAnnotation: true
+    ignoreNamedArgument: true
+    ignoreEnums: true
+    ignoreRanges: true
+    ignoreExtensionFunctions: true
+    excludes: ['**/test/**', '**/*Test.kt', '**/Fixtures.kt']
+  WildcardImport:
+    active: true
+    excludeImports: ['java.util.*']
+  MaxLineLength:
+    active: true
+    maxLineLength: 160
+    excludeCommentStatements: true
+  ReturnCount:
+    active: true
+    max: 4
+    excludedFunctions: ['equals']
+  UnusedPrivateMember:
+    active: true
+    allowedNames: '_|ignored|unused'
+
+# ─── complexity — select/aggregate/transaction readability (WARNING-grade) ───
+# `select { }` / `aggregate { }` builders and `Session.tx {}` bodies are
+# exactly where complexity creeps in — long `where` chains, deep `tx { tx {`
+# nesting, builders with too many knobs. These thresholds catch that drift
+# before it makes the query hard to reason about transactionally.
+complexity:
+  active: true
+  LongMethod:
+    active: true
+    threshold: 60
+  LongParameterList:
+    active: true
+    functionThreshold: 7
+    constructorThreshold: 9
+    ignoreDefaultParameters: true
+    ignoreDataClasses: true
+  CyclomaticComplexMethod:
+    active: true
+    threshold: 15
+  NestedBlockDepth:
+    active: true
+    threshold: 4
+  TooManyFunctions:
+    active: true
+    thresholdInFiles: 25
+    thresholdInClasses: 25
+    thresholdInObjects: 25
+    thresholdInInterfaces: 25
+    ignoreDeprecated: true
+    ignoreOverridden: true
+
+# ─── performance — render/runtime hot paths (WARNING-grade) ──────────────────
+# `renderSelect` / `Binder` run on every single query execution; these rules
+# flag allocation patterns that matter specifically on that path.
+performance:
+  active: true
+  SpreadOperator:
+    active: true
+  ArrayPrimitive:
+    active: true
+  ForEachOnRange:
+    active: true
+  UnnecessaryTemporaryInstantiation:
+    active: true
+
+naming:
+  active: true
+  FunctionNaming:
+    active: true
+    excludes: ['**/test/**']
+  VariableNaming:
+    active: true
+    excludes: ['**/test/**']

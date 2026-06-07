@@ -87,12 +87,31 @@ data class CheckConstraint(
     val expression: (columnName: String) -> String,
     val name: String? = null,
     val key: String? = null,
-) {
-    fun effectiveName(tableName: String, columnName: String): String =
-        name ?: "chk_${tableName}_${columnName}"
+) : (String) -> String {
+    override fun invoke(columnName: String): String = expression(columnName)
+    /**
+     * Computes the constraint name, appending `_N` when a column carries more than one check
+     * so each constraint gets a unique, stable database identifier.
+     *
+     * [indexInColumn] is 0-based; [totalInColumn] is the total number of checks on the column.
+     * When the column has exactly one check the legacy name `chk_{table}_{column}` is preserved.
+     */
+    fun effectiveName(
+        tableName: String,
+        columnName: String,
+        indexInColumn: Int = 0,
+        totalInColumn: Int = 1,
+    ): String = name ?: if (totalInColumn <= 1)
+        "chk_${tableName}_${columnName}"
+    else
+        "chk_${tableName}_${columnName}_${indexInColumn + 1}"
 
-    fun effectiveKey(tableName: String, columnName: String): String =
-        key ?: effectiveName(tableName, columnName)
+    fun effectiveKey(
+        tableName: String,
+        columnName: String,
+        indexInColumn: Int = 0,
+        totalInColumn: Int = 1,
+    ): String = key ?: effectiveName(tableName, columnName, indexInColumn, totalInColumn)
 }
 
 /**

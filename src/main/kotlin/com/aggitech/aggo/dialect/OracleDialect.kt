@@ -1,5 +1,7 @@
 package com.aggitech.aggo.dialect
 
+import com.aggitech.aggo.query.DatePart
+import com.aggitech.aggo.query.IntervalUnit
 import com.aggitech.aggo.schema.Codec
 import com.aggitech.aggo.schema.Column
 import com.aggitech.aggo.schema.MigratableCodec
@@ -51,6 +53,38 @@ object OracleDialect : MigrationDialect {
             "RETURNING $columns INTO ${outParams.joinToString(", ") { it.bindName }}",
             outParams,
         )
+    }
+
+    /**
+     * Oracle has no `date_trunc`; `TRUNC(date, format_model)` is the equivalent
+     * for calendar precisions. Sub-minute precision (`SECOND`) has no `TRUNC`
+     * format model, so it is unsupported here.
+     */
+    override fun renderDateTrunc(field: DatePart, source: String): String {
+        val formatModel = when (field) {
+            DatePart.YEAR -> "YYYY"
+            DatePart.MONTH -> "MM"
+            DatePart.DAY -> "DD"
+            DatePart.HOUR -> "HH24"
+            DatePart.MINUTE -> "MI"
+            else -> throw UnsupportedOperationException(
+                "Oracle TRUNC(date, fmt) does not support DatePart.$field — " +
+                    "supported: YEAR, MONTH, DAY, HOUR, MINUTE",
+            )
+        }
+        return "TRUNC($source, '$formatModel')"
+    }
+
+    /**
+     * Year/month intervals use `NUMTOYMINTERVAL`; day-through-second intervals
+     * use `NUMTODSINTERVAL`. Both take the unit name as an uppercase string literal.
+     */
+    override fun renderInterval(quantityPlaceholder: String, unit: IntervalUnit): String {
+        val factory = when (unit) {
+            IntervalUnit.YEAR, IntervalUnit.MONTH -> "NUMTOYMINTERVAL"
+            IntervalUnit.DAY, IntervalUnit.HOUR, IntervalUnit.MINUTE, IntervalUnit.SECOND -> "NUMTODSINTERVAL"
+        }
+        return "$factory($quantityPlaceholder, '${unit.name}')"
     }
 
     override fun columnSqlType(codec: Codec<*>): String {

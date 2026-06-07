@@ -1,5 +1,7 @@
 package com.aggitech.aggo.dialect
 
+import com.aggitech.aggo.query.DatePart
+import com.aggitech.aggo.query.IntervalUnit
 import com.aggitech.aggo.schema.Codec
 import com.aggitech.aggo.schema.Column
 import com.aggitech.aggo.schema.MigratableCodec
@@ -49,6 +51,32 @@ object MySqlDialect : MigrationDialect {
             "SELECT $columns FROM ${qualifyTableName(firstPk.table.name)} WHERE $where",
         )
     }
+
+    /**
+     * MySQL has no `date_trunc`. Each precision is built from `DATE_FORMAT`
+     * (zeroing out the finer fields) and re-cast to `DATETIME` so the result
+     * round-trips through [com.aggitech.aggo.schema.LocalDateTimeCodec] like
+     * Postgres's `date_trunc` does.
+     */
+    override fun renderDateTrunc(field: DatePart, source: String): String {
+        val format = when (field) {
+            DatePart.YEAR -> "%Y-01-01 00:00:00"
+            DatePart.MONTH -> "%Y-%m-01 00:00:00"
+            DatePart.DAY -> "%Y-%m-%d 00:00:00"
+            DatePart.HOUR -> "%Y-%m-%d %H:00:00"
+            DatePart.MINUTE -> "%Y-%m-%d %H:%i:00"
+            DatePart.SECOND -> "%Y-%m-%d %H:%i:%s"
+            else -> throw UnsupportedOperationException(
+                "MySQL date_trunc equivalent does not support DatePart.$field — " +
+                    "supported: YEAR, MONTH, DAY, HOUR, MINUTE, SECOND",
+            )
+        }
+        return "CAST(DATE_FORMAT($source, '$format') AS DATETIME)"
+    }
+
+    /** `INTERVAL ? unit` — e.g. `INTERVAL ? DAY`. [IntervalUnit] names match MySQL's keywords. */
+    override fun renderInterval(quantityPlaceholder: String, unit: IntervalUnit): String =
+        "INTERVAL $quantityPlaceholder ${unit.name}"
 
     override fun columnSqlType(codec: Codec<*>): String {
         if (codec is MigratableCodec<*>) return codec.ddlTypeName

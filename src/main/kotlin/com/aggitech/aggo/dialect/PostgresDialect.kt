@@ -1,5 +1,7 @@
 package com.aggitech.aggo.dialect
 
+import com.aggitech.aggo.query.DatePart
+import com.aggitech.aggo.query.IntervalUnit
 import com.aggitech.aggo.schema.Codec
 import com.aggitech.aggo.schema.Column
 import com.aggitech.aggo.schema.MigratableCodec
@@ -52,6 +54,13 @@ object PostgresDialect : MigrationDialect {
             "RETURNING ${primaryKeyColumns.joinToString(", ") { quoteIdentifier(it.name) }}",
         )
     }
+
+    override fun renderDateTrunc(field: DatePart, source: String): String =
+        "date_trunc('${field.truncName}', $source)"
+
+    /** `quantity * INTERVAL '1 unit'` — e.g. `$1 * INTERVAL '1 day'`. */
+    override fun renderInterval(quantityPlaceholder: String, unit: IntervalUnit): String =
+        "($quantityPlaceholder * INTERVAL '1 ${unit.name.lowercase()}')"
 
     /**
      * Maps an R2DBC driver type ([Codec.sqlType]) to a Postgres DDL column type.

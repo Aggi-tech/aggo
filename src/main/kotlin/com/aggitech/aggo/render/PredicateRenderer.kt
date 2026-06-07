@@ -2,6 +2,7 @@ package com.aggitech.aggo.render
 
 import com.aggitech.aggo.query.Operand
 import com.aggitech.aggo.query.Predicate
+import com.aggitech.aggo.schema.IntCodec
 import com.aggitech.aggo.schema.StringCodec
 
 internal object PredicateRenderer {
@@ -78,10 +79,7 @@ internal object PredicateRenderer {
 
     @Suppress("UNCHECKED_CAST")
     fun renderOperand(operand: Operand, ctx: RenderContext, column: com.aggitech.aggo.schema.Column<*, *>? = null): String = when (operand) {
-        is Operand.Col<*, *> -> {
-            val col = operand.column
-            "${ctx.dialect.qualifyTableName(col.table.name)}.${ctx.dialect.quoteIdentifier(col.name)}"
-        }
+        is Operand.Col<*, *> -> ctx.qualifyColumn(operand.column)
         is Operand.Literal<*> -> {
             // Cast is safe: Operand.Literal pairs value with the matching codec.
             val raw = operand as Operand.Literal<Any?>
@@ -99,6 +97,18 @@ internal object PredicateRenderer {
             "${operand.name}($distinctStr$args)"
         }
         is Operand.Star -> "*"
+        is Operand.Extract -> {
+            val source = renderOperand(operand.source, ctx)
+            ctx.dialect.renderExtract(operand.field, source)
+        }
+        is Operand.DateTrunc -> {
+            val source = renderOperand(operand.source, ctx)
+            ctx.dialect.renderDateTrunc(operand.field, source)
+        }
+        is Operand.IntervalLiteral -> {
+            val placeholder = ctx.bind(operand.quantity, IntCodec, column)
+            ctx.dialect.renderInterval(placeholder, operand.unit)
+        }
     }
 
     private fun Operand.columnRef(): com.aggitech.aggo.schema.Column<*, *>? =

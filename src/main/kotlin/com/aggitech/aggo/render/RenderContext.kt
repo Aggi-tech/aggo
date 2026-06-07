@@ -38,10 +38,26 @@ data class RenderedInsert(
  * Accumulates parameters in render order and produces dialect-specific
  * placeholders. The single source of truth for "what comes out of [bind]".
  */
-class RenderContext(val dialect: SqlDialect) {
+class RenderContext(val dialect: SqlDialect, private val tableAliases: Map<String, String> = emptyMap()) {
     private val collected: MutableList<Bound> = mutableListOf()
 
     val params: List<Bound> get() = collected
+
+    /**
+     * Render a fully-qualified column reference, honouring any table alias
+     * registered for [column]'s table (e.g. `select(People, alias = "p")`
+     * renders `"p"."id"` instead of `"people"."id"`).
+     *
+     * The single qualification choke-point — [PredicateRenderer] and the
+     * SELECT renderers call this instead of building `qualifier.column`
+     * strings by hand, so alias support never needs duplicating.
+     */
+    fun qualifyColumn(column: Column<*, *>): String {
+        val tableName = column.table.name
+        val qualifier = tableAliases[tableName]?.let { dialect.quoteIdentifier(it) }
+            ?: dialect.qualifyTableName(tableName)
+        return "$qualifier.${dialect.quoteIdentifier(column.name)}"
+    }
 
     /**
      * Append a bound value and return the placeholder. [column] should be set

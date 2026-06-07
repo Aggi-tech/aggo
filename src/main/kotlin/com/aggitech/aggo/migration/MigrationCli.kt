@@ -9,6 +9,10 @@ import io.r2dbc.spi.Result
 import kotlinx.coroutines.reactive.collect
 import kotlinx.coroutines.runBlocking
 import org.reactivestreams.Publisher
+import java.nio.file.Files
+import kotlin.io.path.deleteIfExists
+import kotlin.io.path.exists
+import kotlin.io.path.writeText
 
 /**
  * Subcommand dispatcher for [AggoMigrateTask].
@@ -67,6 +71,29 @@ internal object MigrationCli {
     private fun generate(task: AggoMigrateTask, args: Array<String>) {
         val name = args.firstOrNull()?.takeIf { it.isNotBlank() }
             ?: System.getProperty("aggo.name")?.takeIf { it.isNotBlank() }
+
+        // DB is the authoritative snapshot source. Sync to the local file so that
+        // AggoMigrate.generate (which is file-based) always diffs against the actual
+        // applied state. Falls through silently when DB credentials are unavailable
+        // (first run, CI without DB access, etc.) so that file-based fallback works.
+        if (hasDbConfig(task)) {
+            runCatching {
+                withAggo(task) { aggo ->
+                    val snapshotJson = runBlocking { aggo.session.readLatestSnapshot() }
+                    if (snapshotJson != null) {
+                        Files.createDirectories(task.snapshotFile.parent)
+                        task.snapshotFile.writeText(snapshotJson, Charsets.UTF_8)
+                    } else if (task.snapshotFile.exists()) {
+                        // DB has no snapshot yet the file exists → DB was dropped and recreated.
+                        // Remove the stale file so generate treats this as a fresh schema.
+                        task.snapshotFile.deleteIfExists()
+                    }
+                }
+            }.onFailure { ex ->
+                System.err.println("aggo: could not read snapshot from DB — using local file (${ex.message})")
+            }
+        }
+
         AggoMigrate.generate(
             tables = task.tables,
             dialect = task.dialect,
@@ -121,6 +148,11 @@ internal object MigrationCli {
                 println("Database already at latest version. ($skipped skipped)")
             } else {
                 println("${executed.size} applied, $skipped already on disk.")
+                // Store the current schema snapshot in the DB so the next 'generate'
+                // always diffs against the exact state that was applied.
+                val lastVersion = executed.last().toVersion
+                val snapshotJson = migrationSchema(lastVersion, task.tables, task.dialect).toJson()
+                runBlocking { aggo.tx.storeSnapshot(lastVersion, snapshotJson) }
             }
         }
     }
@@ -162,6 +194,13 @@ internal object MigrationCli {
             }
         }
         println("Dropped ${tableNames.size} tables.")
+
+        // Clear the snapshot so the next 'generate' treats the schema as a fresh start.
+        // Leaving a stale snapshot after a drop causes 'generate' to diff against the
+        // old state and may produce migrations with constraints that no longer exist.
+        if (task.snapshotFile.deleteIfExists()) {
+            println("Cleared snapshot: ${task.snapshotFile}")
+        }
     }
 
     // ----- reset ----------------------------------------------------------
@@ -255,3 +294,9 @@ private fun sysOrEnv(systemProperty: String, envVar: String): String? =
 private fun requireSetting(systemProperty: String, envVar: String): String =
     sysOrEnv(systemProperty, envVar)
         ?: error("Database setting not provided. Set -D$systemProperty=… or env $envVar.")
+
+private fun hasDbConfig(task: AggoMigrateTask): Boolean =
+    task.poolConfig != null ||
+        (sysOrEnv("aggo.db.user", "AGGO_DB_USER") != null &&
+            sysOrEnv("aggo.db.password", "AGGO_DB_PASSWORD") != null &&
+            sysOrEnv("aggo.db.database", "AGGO_DB_DATABASE") != null)

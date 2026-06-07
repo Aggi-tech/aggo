@@ -50,4 +50,44 @@ sealed interface Operand {
      * Created by [com.aggitech.aggo.dsl.countStar].
      */
     object Star : Operand
+
+    /**
+     * `EXTRACT(field FROM source)` — pulls a date/time subfield out of a
+     * date, time, or timestamp expression.
+     *
+     * [field] is a closed [DatePart] enum (never a raw string), so there is
+     * no risk of identifier/keyword injection in the generated SQL.
+     *
+     * Created by [com.aggitech.aggo.dsl.extract] and the shorthand helpers
+     * ([com.aggitech.aggo.dsl.year], [com.aggitech.aggo.dsl.month], etc.).
+     */
+    data class Extract(val field: DatePart, val source: Operand) : Operand
+
+    /**
+     * Truncates a date/time expression down to the precision named by [field]
+     * (e.g. `DAY`, `MONTH`, `HOUR`) — PostgreSQL's `date_trunc`, MySQL's
+     * `DATE_FORMAT`-based equivalent, Oracle's `TRUNC(date, fmt)`, etc.
+     *
+     * Each [com.aggitech.aggo.dialect.SqlDialect] renders this with the
+     * syntax its database understands; [PredicateRenderer] never hard-codes
+     * `date_trunc`.
+     *
+     * Created by [com.aggitech.aggo.dsl.dateTrunc].
+     */
+    data class DateTrunc(val field: DatePart, val source: Operand) : Operand
+
+    /**
+     * A typed `quantity` × `unit` interval — e.g. "30 days" or "2 hours".
+     *
+     * [quantity] is bound as an ordinary integer parameter; [unit] is a closed
+     * [IntervalUnit] enum. Each dialect renders the pair using the syntax its
+     * database understands (`$1 * INTERVAL '1 day'` in Postgres,
+     * `INTERVAL ? DAY` in MySQL, `NUMTODSINTERVAL(?, 'DAY')` in Oracle, ...) —
+     * never a spliced free-form string, so there is no injection surface.
+     *
+     * Created by [com.aggitech.aggo.dsl.interval] and the
+     * [com.aggitech.aggo.dsl.plusInterval] / [com.aggitech.aggo.dsl.minusInterval]
+     * column operators.
+     */
+    data class IntervalLiteral(val quantity: Int, val unit: IntervalUnit) : Operand
 }

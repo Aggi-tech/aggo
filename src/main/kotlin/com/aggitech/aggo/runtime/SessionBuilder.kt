@@ -157,4 +157,7 @@ class SessionBuilder internal constructor(
                 session.streamAggregate(table, block).collect { value -> emit(value) }
             }
         }
+
+    suspend fun readLatestSnapshot(): String? =
+        invoke { session -> session.readLatestSnapshot() }
 }

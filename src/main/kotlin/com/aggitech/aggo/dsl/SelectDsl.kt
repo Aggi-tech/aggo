@@ -39,6 +39,8 @@ class SelectBuilder<E> internal constructor(val table: Table<E>) {
     private val orderBy: MutableList<Ordering<E, *>> = mutableListOf()
     private var limit: Int? = null
     private var offset: Int? = null
+    private var distinct: Boolean = false
+    private var alias: String? = null
 
     /**
      * Filter rows. The block must return a [Predicate] built from the column
@@ -70,7 +72,35 @@ class SelectBuilder<E> internal constructor(val table: Table<E>) {
     /** Number of rows to skip before returning results. Passed as `OFFSET n`. */
     fun offset(n: Int) { offset = n }
 
-    internal fun build(): Select<E> = Select(table, where, orderBy.toList(), limit, offset)
+    /**
+     * Eliminate duplicate rows from the result set. Renders as `SELECT DISTINCT ...`.
+     *
+     * ```kotlin
+     * select(Orders) {
+     *     distinct()
+     *     where { Orders.status eq "shipped" }
+     * }
+     * ```
+     */
+    fun distinct() { distinct = true }
+
+    /**
+     * Give the table a SQL alias for this query — renders `FROM "table" AS "p"`
+     * and qualifies every column reference (`WHERE`, `ORDER BY`) with `"p"."col"`
+     * instead of `"table"."col"`. Useful for self-joins, correlated subqueries,
+     * or simply shortening verbose table names in the rendered SQL.
+     *
+     * ```kotlin
+     * select(People) {
+     *     alias("p")
+     *     where { People.active eq true }
+     * }
+     * // SELECT "id", ... FROM "people" AS "p" WHERE "p"."active" = $1
+     * ```
+     */
+    fun alias(name: String) { alias = name }
+
+    internal fun build(): Select<E> = Select(table, where, orderBy.toList(), limit, offset, distinct, alias)
 }
 
 /**
