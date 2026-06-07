@@ -3,6 +3,7 @@ package com.aggitech.aggo.dsl
 import com.aggitech.aggo.query.ArithmeticOp
 import com.aggitech.aggo.query.DatePart
 import com.aggitech.aggo.query.Expr
+import com.aggitech.aggo.query.IntervalUnit
 import com.aggitech.aggo.query.Operand
 import com.aggitech.aggo.schema.Codec
 import com.aggitech.aggo.schema.Column
