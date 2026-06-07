@@ -17,10 +17,12 @@ Compared with Hibernate `hbm2ddl`, Aggo migrations are intended to be reviewed,
 versioned, and applied deliberately. Do not use automatic schema mutation at
 application startup for production.
 
-## AggoMigrateTask — zero-boilerplate Maven entry point
+## AggoMigrateTask — project CLI entry point
 
-`AggoMigrateTask` is the recommended way to trigger migration generation from
-Maven. It replaces manual `main()` functions with a single-object declaration.
+`AggoMigrateTask` is the recommended way to expose migration generation as a
+small project CLI. It replaces manual migration generator functions with a
+single-object declaration and works with Maven, Gradle, or any launcher that can
+run a Kotlin `main`.
 
 ### 1. Declare the task
 
@@ -37,54 +39,211 @@ object Migrations : AggoMigrateTask() {
 fun main(args: Array<String>) = Migrations.runFromArgs(args)
 ```
 
-### 2. Wire exec-maven-plugin in pom.xml
+### 2. Wire the launcher
+
+#### Gradle Kotlin DSL
+
+Register two JavaExec tasks: `aggoCli` installs the Unix executable, and
+`aggoCliRun` is the internal runner used by that executable.
+
+```kotlin
+// build.gradle.kts
+tasks.register<JavaExec>("aggoCli") {
+    group = "aggo"
+    description = "Install the Aggo CLI executable"
+    dependsOn("classes")
+
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("com.example.db.MigrationsKt")
+    args("migrate", "install-cli")
+}
+
+tasks.register<JavaExec>("aggoCliRun") {
+    group = "aggo"
+    description = "Run the Aggo CLI"
+    dependsOn("classes")
+
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("com.example.db.MigrationsKt")
+}
+```
+
+Install the Unix launcher once:
+
+```bash
+./gradlew :aggoCli
+```
+
+After that, use `aggo` like any other CLI executable:
+
+```bash
+aggo migrate generate --name add_orders_table
+aggo migrate run
+aggo migrate status
+aggo migrate dry-run
+```
+
+By default this writes `~/.local/bin/aggo`. If that directory is not on your
+PATH, add it to your shell profile:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+You can customize the install path or command name:
+
+```bash
+./gradlew :aggoCli --args="migrate install-cli --dir /usr/local/bin --command aggo"
+```
+
+If your team wants the shorter task that failed in the build log
+(`:infrastructure:aggoGenerate`), register aliases on top of the same CLI:
+
+```kotlin
+tasks.register<JavaExec>("aggoGenerate") {
+    group = "aggo"
+    description = "Generate an Aggo migration"
+    dependsOn("classes")
+
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("com.example.db.MigrationsKt")
+    args("migrate", "generate")
+
+    providers.gradleProperty("name").orNull
+        ?.takeIf { it.isNotBlank() }
+        ?.let { args("--name", it) }
+}
+
+tasks.register<JavaExec>("aggoMigrateRun") {
+    group = "aggo"
+    description = "Run pending Aggo migrations"
+    dependsOn("classes")
+
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("com.example.db.MigrationsKt")
+    args("migrate", "run")
+}
+```
+
+Usage:
+
+```bash
+./gradlew :infrastructure:aggoGenerate -Pname=add_orders_table
+./gradlew :infrastructure:aggoMigrateRun
+```
+
+#### Maven plugin
 
 ```xml
 <plugin>
-  <groupId>org.codehaus.mojo</groupId>
-  <artifactId>exec-maven-plugin</artifactId>
-  <version>3.4.1</version>
-  <executions>
-    <execution>
-      <id>aggo-migrate</id>
-      <goals><goal>java</goal></goals>
-      <configuration>
-        <mainClass>com.example.db.MigrationsKt</mainClass>
-      </configuration>
-    </execution>
-  </executions>
+  <groupId>com.aggitech</groupId>
+  <artifactId>aggo-maven-plugin</artifactId>
+  <version>0.7.0</version>
+  <configuration>
+    <mainClass>com.example.db.MigrationsKt</mainClass>
+  </configuration>
 </plugin>
+```
+
+Install the Unix launcher once:
+
+```bash
+mvn aggo:install
+```
+
+This writes `~/.local/bin/aggo` by default. After that, use the installed
+command:
+
+```bash
+aggo migrate generate --name add_orders_table
+aggo migrate run
+aggo migrate status
+```
+
+You can override the install location when needed:
+
+```bash
+mvn aggo:install -Daggo.installDir=/usr/local/bin
+```
+
+#### Script installer
+
+If you do not want to add the Maven plugin or any Gradle task to the project,
+install the Unix executable with the standalone script. The only project
+requirement is a `main` that delegates to `AggoMigrateTask.runFromArgs(args)`.
+
+From this repository:
+
+```bash
+./scripts/install-aggo-cli.sh --main-class com.example.db.MigrationsKt
+```
+
+Or from another project, run this from the project root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Aggi-tech/aggo/main/scripts/install-aggo-cli.sh \
+  | sh -s -- --main-class com.example.db.MigrationsKt
+```
+
+The script writes an executable named `aggo` to `~/.local/bin` by default. It
+auto-detects Gradle when `./gradlew` exists; otherwise it uses Maven:
+
+```bash
+aggo migrate generate --name add_orders_table
+aggo migrate run
+aggo migrate status
+```
+
+Options:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Aggi-tech/aggo/main/scripts/install-aggo-cli.sh \
+  | sh -s -- \
+  --main-class com.example.db.MigrationsKt \
+  --project-dir /path/to/project \
+  --install-dir /usr/local/bin \
+  --runner maven
 ```
 
 ### 3. Run subcommands
 
-`AggoMigrateTask` exposes a small set of subcommands as the first positional
-argument. With no subcommand, the legacy "generate with optional name" form is
-preserved.
+`AggoMigrateTask` exposes migration commands under the `migrate` command group.
+The older forms (`generate add_orders_table`, `apply`, etc.) are still accepted
+for compatibility.
 
 ```bash
 # Generate a new migration file from current Tables (default)
 mvn compile exec:java
-mvn compile exec:java -Dexec.args="generate add_orders_table"
+mvn compile exec:java -Dexec.args="migrate generate add_orders_table"
+mvn compile exec:java -Dexec.args="migrate generate --name add_orders_table"
 
 # Apply pending migrations against the configured database
-mvn compile exec:java -Dexec.args="apply"
+mvn compile exec:java -Dexec.args="migrate run"
 
 # Show applied vs pending without running anything
-mvn compile exec:java -Dexec.args="status"
+mvn compile exec:java -Dexec.args="migrate status"
 
 # Print the pending SQL to stdout without applying
-mvn compile exec:java -Dexec.args="dry-run"
+mvn compile exec:java -Dexec.args="migrate dry-run"
 
 # Drop every declared table and aggo_schema_versions (dev only by default)
-mvn compile exec:java -Dexec.args="drop"
-mvn compile exec:java -Dexec.args="drop --force"   # bypass prod guard
+mvn compile exec:java -Dexec.args="migrate drop"
+mvn compile exec:java -Dexec.args="migrate drop --force"   # bypass prod guard
 
 # Drop + apply in one shot (e.g. reset a local DB after schema churn)
-mvn compile exec:java -Dexec.args="reset"
+mvn compile exec:java -Dexec.args="migrate reset"
 
 # Print help
-mvn compile exec:java -Dexec.args="help"
+mvn compile exec:java -Dexec.args="migrate help"
+```
+
+Maven projects can install the same Unix launcher:
+
+```bash
+mvn compile exec:java -Dexec.args="migrate install-cli --runner maven"
+
+aggo migrate generate --name add_orders_table
+aggo migrate run
 ```
 
 `generate` produces a `{timestamp}_name.sql` file under `migrationsDir` and
@@ -144,7 +303,7 @@ one of two ways:
 
 | What | Default path | Override via |
 |------|-------------|--------------|
-| Schema snapshot | `target/aggo/snapshot.json` for Maven, `build/aggo/snapshot.json` for Gradle | `-Daggo.snapshotFile=…` or `override val snapshotFile` |
+| Schema snapshot | `src/main/aggo/snapshot.json` | `-Daggo.snapshotFile=…` or `override val snapshotFile` |
 | Migration files | `src/main/resources/aggo/migrations/` | `-Daggo.migrationsDir=…` or `override val migrationsDir` |
 | Version label | _(timestamp only)_ | `-Daggo.name=…` or `args[0]` |
 
@@ -690,11 +849,11 @@ fun main(args: Array<String>) = Migrations.runFromArgs(args)
 Comandos principais:
 
 ```bash
-mvn compile exec:java -Dexec.args="generate add_users"
-mvn compile exec:java -Dexec.args="status"
-mvn compile exec:java -Dexec.args="dry-run"
-mvn compile exec:java -Dexec.args="apply"
-mvn compile exec:java -Dexec.args="reset"
+mvn compile exec:java -Dexec.args="migrate generate add_users"
+mvn compile exec:java -Dexec.args="migrate status"
+mvn compile exec:java -Dexec.args="migrate dry-run"
+mvn compile exec:java -Dexec.args="migrate run"
+mvn compile exec:java -Dexec.args="migrate reset"
 ```
 
 `drop` e `reset` sao destrutivos e recusam rodar em `AGGO_ENV=prod` sem

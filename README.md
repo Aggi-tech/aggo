@@ -205,6 +205,24 @@ class AggoProducer {
 
 Native build: no `reflect-config.json` needed for aggo itself.
 
+## Aggo CLI
+
+Install the `aggo` executable without adding a Maven plugin or Gradle task:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Aggi-tech/aggo/main/scripts/install-aggo-cli.sh \
+  | sh -s -- --main-class com.example.db.MigrationsKt
+```
+
+Then run migrations from the project shell:
+
+```bash
+aggo migrate generate --name add_orders
+aggo migrate run
+```
+
+Full migration setup options are in `docs/06-migrations.md`.
+
 ## Build / publish
 
 ```bash

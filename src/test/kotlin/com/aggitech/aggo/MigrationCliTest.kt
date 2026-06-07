@@ -17,6 +17,7 @@ import java.io.PrintStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
+import kotlin.io.path.readText
 
 private object MiniTable : Table<Unit>("mini") {
     @Suppress("unused")
@@ -53,8 +54,8 @@ class MigrationCliTest : StringSpec({
         val tmp = Files.createTempDirectory("aggo-cli-help")
         val task = TestTask(tmp.resolve("snapshot.json"), tmp.resolve("migrations"))
         val out = captureStdout { task.runFromArgs(arrayOf("help")) }
-        out shouldContain "generate"
-        out shouldContain "apply"
+        out shouldContain "aggo migrate generate"
+        out shouldContain "aggo migrate run"
         out shouldContain "status"
         out shouldContain "drop"
         out shouldContain "reset"
@@ -131,6 +132,99 @@ class MigrationCliTest : StringSpec({
         val files = Files.list(tmp.resolve("migrations")).toList()
         files.size shouldBe 1
         files.single().fileName.toString() shouldContain "add_things"
+    }
+
+    "generate accepts --name option for Gradle JavaExec wiring" {
+        val tmp = Files.createTempDirectory("aggo-cli-name-option")
+        val task = TestTask(tmp.resolve("snapshot.json"), tmp.resolve("migrations"))
+        captureStdout { task.runFromArgs(arrayOf("migrate", "generate", "--name", "add_widgets")) }
+        val files = Files.list(tmp.resolve("migrations")).toList()
+        files.size shouldBe 1
+        files.single().fileName.toString() shouldContain "add_widgets"
+    }
+
+    "generate accepts --name=value option" {
+        val tmp = Files.createTempDirectory("aggo-cli-name-equals")
+        val task = TestTask(tmp.resolve("snapshot.json"), tmp.resolve("migrations"))
+        captureStdout { task.runFromArgs(arrayOf("generate", "--name=add_reports")) }
+        val files = Files.list(tmp.resolve("migrations")).toList()
+        files.size shouldBe 1
+        files.single().fileName.toString() shouldContain "add_reports"
+    }
+
+    "gen alias accepts short -n option" {
+        val tmp = Files.createTempDirectory("aggo-cli-gen-alias")
+        val task = TestTask(tmp.resolve("snapshot.json"), tmp.resolve("migrations"))
+        captureStdout { task.runFromArgs(arrayOf("gen", "-n", "add_events")) }
+        val files = Files.list(tmp.resolve("migrations")).toList()
+        files.size shouldBe 1
+        files.single().fileName.toString() shouldContain "add_events"
+    }
+
+    "migrate run reports empty migration directory without DB access" {
+        val tmp = Files.createTempDirectory("aggo-cli-migrate-run")
+        val task = TestTask(tmp.resolve("snapshot.json"), tmp.resolve("migrations"))
+        val out = captureStdout { task.runFromArgs(arrayOf("migrate", "run")) }
+        out shouldContain "No migration files"
+    }
+
+    "migrate install-cli writes an executable Unix launcher using aggoCliRun by default" {
+        val tmp = Files.createTempDirectory("aggo-cli-install-default")
+        val bin = Files.createDirectories(tmp.resolve("bin"))
+        val project = Files.createDirectories(tmp.resolve("project"))
+        val task = TestTask(tmp.resolve("snapshot.json"), tmp.resolve("migrations"))
+
+        captureStdout {
+            task.runFromArgs(
+                arrayOf(
+                    "migrate",
+                    "install-cli",
+                    "--dir",
+                    bin.toString(),
+                    "--project-dir",
+                    project.toString(),
+                    "--runner",
+                    "gradle",
+                )
+            )
+        }
+
+        val launcher = bin.resolve("aggo")
+        Files.exists(launcher) shouldBe true
+        launcher.toFile().canExecute() shouldBe true
+        launcher.readText() shouldContain "cd '$project'"
+        launcher.readText() shouldContain "exec ./gradlew -q ':aggoCliRun' --args=\"\$*\""
+    }
+
+    "migrate install-cli allows overriding the Gradle task" {
+        val tmp = Files.createTempDirectory("aggo-cli-install")
+        val bin = Files.createDirectories(tmp.resolve("bin"))
+        val project = Files.createDirectories(tmp.resolve("project"))
+        val task = TestTask(tmp.resolve("snapshot.json"), tmp.resolve("migrations"))
+
+        val out = captureStdout {
+            task.runFromArgs(
+                arrayOf(
+                    "migrate",
+                    "install-cli",
+                    "--dir",
+                    bin.toString(),
+                    "--project-dir",
+                    project.toString(),
+                    "--runner",
+                    "gradle",
+                    "--gradle-task",
+                    ":infrastructure:aggo",
+                )
+            )
+        }
+
+        val launcher = bin.resolve("aggo")
+        Files.exists(launcher) shouldBe true
+        launcher.toFile().canExecute() shouldBe true
+        launcher.readText() shouldContain "cd '$project'"
+        launcher.readText() shouldContain "exec ./gradlew -q ':infrastructure:aggo' --args=\"\$*\""
+        out shouldContain "Installed Aggo CLI"
     }
 
     "environment defaults to dev when no env or system property is set" {
