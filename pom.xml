@@ -272,6 +272,7 @@
                         <include>${project.basedir}/docs/05-joins.md</include>
                         <include>${project.basedir}/docs/06-migrations.md</include>
                         <include>${project.basedir}/docs/07-multitenancy.md</include>
+                        <include>${project.basedir}/docs/08-notifications.md</include>
                     </includes>
                     <documentedVisibilities>
                         <visibility>PUBLIC</visibility>

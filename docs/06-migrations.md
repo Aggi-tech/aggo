@@ -485,6 +485,129 @@ mapping and emit a sized SQL type instead. See the
 [Typed column builders](02-schema.md#typed-column-builders-sized-sql-types)
 section in the schema reference for the full list.
 
+## Notification trigger DDL
+
+`migrationSchema` and `migrationPlan` accept an optional list of
+[`NotifyTrigger`](02-schema.md#notification-triggers--notifytrigger)
+declarations and fold their DDL into the same `MigrationPlan` as tables, FKs,
+and indexes — triggers are created in the same migration, after the tables and
+the outbox table they depend on:
+
+```kotlin
+import com.aggitech.aggo.dialect.PostgresDialect
+import com.aggitech.aggo.dialect.PostgresTriggerDialect
+import com.aggitech.aggo.migration.migrationPlan
+import com.aggitech.aggo.migration.migrationSchema
+
+val schema = migrationSchema(
+    version  = "2026.06.01.001",
+    tables   = listOf(UsersTable, OrdersTable),
+    dialect  = PostgresDialect,
+    triggers = listOf(UserInsertedTrigger, OrderCreatedTrigger),
+)
+
+val plan = migrationPlan(
+    current        = schema,
+    dialect        = PostgresDialect,
+    triggerDialect = PostgresTriggerDialect,
+)
+
+aggo.applyMigration(plan)
+```
+
+Pass `triggerDialect` whenever either schema declares triggers — it renders the
+trigger/function/outbox-table DDL. Omitting it while triggers are present
+throws `IllegalArgumentException` immediately: a configuration error must
+surface at plan-generation time, not produce a plan silently missing trigger
+DDL.
+
+### `TriggerDialect` — per-database trigger DDL
+
+`TriggerDialect` is implemented alongside `MigrationDialect` and encapsulates
+how each database expresses "run this on row change, then notify":
+
+```kotlin
+interface TriggerDialect {
+    fun renderNotifyTriggerDdl(trigger: NotifyTrigger<*>, outboxTableName: String = OUTBOX_TABLE): List<String>
+    fun renderOutboxTableDdl(outboxTableName: String = OUTBOX_TABLE): List<String>
+    fun renderDropTriggerDdl(trigger: NotifyTrigger<*>): List<String>
+}
+```
+
+| Dialect | `renderNotifyTriggerDdl` | `renderOutboxTableDdl` |
+|---------|--------------------------|------------------------|
+| `PostgresTriggerDialect` | `CREATE OR REPLACE FUNCTION` (calls `pg_notify`) + `CREATE TRIGGER ... EXECUTE FUNCTION` | empty — PostgreSQL never needs an outbox |
+| `MySqlTriggerDialect` | one `CREATE TRIGGER` **per declared event** (MySQL cannot bind multiple events to a single trigger), each `INSERT`-ing into the outbox | `CREATE TABLE IF NOT EXISTS aggo_notifications (...)` with an `(channel, id)` index |
+| `OracleTriggerDialect` | a single `CREATE OR REPLACE TRIGGER` covering all events (Oracle does support multi-event triggers), `INSERT`-ing into the outbox | `CREATE TABLE` + `CREATE INDEX` for the outbox |
+
+All three dialects route every identifier through `quoteIdentifier`
+(`requireValidIdentifier`), and channel names through the same allowlist
+`NotifyChannel` enforces — generated trigger bodies never interpolate an
+unvalidated string.
+
+PostgreSQL's generated function looks like this:
+
+```sql
+CREATE OR REPLACE FUNCTION "aggo_notify_trg_notify_user_inserted"() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_notify('user_events', (CASE WHEN TG_OP = 'DELETE'
+        THEN (OLD.id) ELSE (NEW.id) END)::text);
+    RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+DROP TRIGGER IF EXISTS "trg_notify_user_inserted" ON "users";
+CREATE TRIGGER "trg_notify_user_inserted"
+AFTER INSERT ON "users"
+FOR EACH ROW EXECUTE FUNCTION "aggo_notify_trg_notify_user_inserted"();
+```
+
+### Multi-event triggers and row images
+
+`NEW` is unpopulated on `DELETE` and `OLD` is unpopulated on
+`INSERT`/`UPDATE`. A trigger declared with `events = {Insert, Update, Delete}`
+cannot select one row image once and reuse it for every operation — so
+`TriggerDialect` rewrites every `NEW`/`OLD` token in `payloadSql` to the
+reference the firing operation actually provides:
+
+- **PostgreSQL / MySQL**: `CASE WHEN TG_OP = 'DELETE' THEN (<payload with OLD>) ELSE (<payload with NEW>) END` (Postgres), or one trigger per event with the matching reference substituted (MySQL).
+- **Oracle**: `CASE WHEN DELETING THEN (<payload with :OLD>) ELSE (<payload with :NEW>) END`.
+
+You write `payloadSql` once, referencing whichever side reads naturally
+(`"NEW.id"`); the generated DDL is correct for every declared event without
+any extra configuration.
+
+### `pg_notify` and outbox rows are commit-only
+
+`PERFORM pg_notify(...)` inside an `AFTER` trigger only fires on `COMMIT` — a
+rolled-back transaction never reaches a listener. The outbox model preserves
+the same guarantee: the `INSERT` into `aggo_notifications` is part of the
+triggering transaction, so a rollback removes the row before
+`OutboxListener` ever sees it. Both are native database behavior, not
+something Aggo layers on top — see
+[Reactive Notifications](08-notifications.md) for the consumer side
+(`AggoListener`, `OutboxListener`, `Session.notify`).
+
+### Diffing triggers across schema versions
+
+Triggers diff the same way tables do — by `name`, against the previous
+snapshot's `triggers` list:
+
+| Change | Migration step |
+|--------|----------------|
+| New trigger | `CreateTrigger` — full `renderNotifyTriggerDdl` |
+| Changed trigger (any field — they're data classes, compared by full equality) | `CreateTrigger` — idempotent via `CREATE OR REPLACE FUNCTION` / `DROP + CREATE` |
+| Removed trigger | Manual step — "trigger '…' removed — drop manually if safe"; dropping a notification trigger can silently stop downstream listeners |
+| First trigger that needs an outbox (MySQL/Oracle) | `CreateOutboxTable` step, emitted once |
+
+`outboxTableName` (default `OUTBOX_TABLE`, `"aggo_notifications"`) names the
+table MySQL/Oracle triggers write to. Pass the same name to `migrationPlan`,
+to `TriggerDialect.renderOutboxTableDdl` (handled for you when both go through
+`migrationPlan`), and to
+[`OutboxListener`](08-notifications.md#outboxlistener--mysqloracle-outbox-polling)
+— DDL and the runtime poller must agree on which table to use.
+
 ## Supporting other databases
 
 Implement `MigrationDialect` for a different database engine:
@@ -593,6 +716,62 @@ object StatusCodec : MigratableCodec<Status> {
     override fun decode(raw: Any?) = (raw as? String)?.let(Status::valueOf)
 }
 ```
+
+### DDL de triggers de notificacao
+
+`migrationSchema` e `migrationPlan` aceitam uma lista opcional de
+[`NotifyTrigger`](02-schema.md#triggers-de-notificacao--notifytrigger) e
+incluem o DDL de funcao/trigger/outbox no mesmo `MigrationPlan` das tabelas —
+na mesma transacao, depois das tabelas e da outbox de que dependem:
+
+```kotlin
+val schema = migrationSchema(
+    version  = "2026.06.01.001",
+    tables   = listOf(UsersTable, OrdersTable),
+    dialect  = PostgresDialect,
+    triggers = listOf(UserInsertedTrigger, OrderCreatedTrigger),
+)
+
+val plan = migrationPlan(schema, PostgresDialect, triggerDialect = PostgresTriggerDialect)
+aggo.applyMigration(plan)
+```
+
+Passe `triggerDialect` sempre que algum dos schemas declarar triggers — sem
+ele, `migrationPlan` lanca `IllegalArgumentException` imediatamente, em vez de
+gerar silenciosamente um plano sem o DDL dos triggers.
+
+`TriggerDialect` e implementado ao lado de `MigrationDialect`:
+
+- **`PostgresTriggerDialect`** gera `CREATE OR REPLACE FUNCTION` (que chama
+  `pg_notify`) + `CREATE TRIGGER ... EXECUTE FUNCTION`. Nunca precisa de outbox.
+- **`MySqlTriggerDialect`** gera um `CREATE TRIGGER` por evento declarado (o
+  MySQL nao aceita multiplos eventos em um unico trigger), cada um inserindo na
+  outbox `aggo_notifications`.
+- **`OracleTriggerDialect`** gera um unico `CREATE OR REPLACE TRIGGER`
+  cobrindo todos os eventos, tambem inserindo na outbox.
+
+Triggers com mais de um evento nao podem fixar `NEW` ou `OLD` — `NEW` fica
+vazio em `DELETE` e `OLD` fica vazio em `INSERT`/`UPDATE`. `TriggerDialect`
+reescreve cada referencia de `payloadSql` para a que a operacao realmente
+popula (`CASE WHEN TG_OP = 'DELETE' ... ELSE ...` no Postgres/MySQL,
+`CASE WHEN DELETING ...` no Oracle), entao a mesma expressao funciona para
+todos os eventos declarados sem configuracao extra.
+
+`pg_notify` dentro de um trigger `AFTER` so dispara em `COMMIT`, e o `INSERT`
+na outbox faz parte da mesma transacao do trigger — em ambos os casos, um
+rollback nunca chega ao listener. Essa e a semantica nativa do banco, nao algo
+que Aggo adiciona. Veja [Notificacoes Reativas](08-notifications.md#notificacoes-reativas-pt)
+para o lado consumidor.
+
+O diff de triggers compara por `name`: novos viram `CreateTrigger`, alterados
+tambem (idempotente via `CREATE OR REPLACE FUNCTION` / `DROP + CREATE`),
+removidos viram um passo manual ("remover manualmente se for seguro" — remover
+um trigger de notificacao pode parar listeners silenciosamente), e a primeira
+vez que algum trigger precisa de outbox gera um passo `CreateOutboxTable`.
+`outboxTableName` (padrao `"aggo_notifications"`) precisa ser o mesmo nome
+passado para `migrationPlan` e para
+[`OutboxListener`](08-notifications.md#outboxlistener--mysqloracle-outbox-polling)
+— DDL e o poller em runtime precisam concordar sobre qual tabela usar.
 
 ### Comparacao com Hibernate
 

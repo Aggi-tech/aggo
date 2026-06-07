@@ -28,6 +28,7 @@ are attached to the package pages below:
 | JOIN Queries / Consultas JOIN | Package page: `com.aggitech.aggo.query` |
 | Migration Generation / Migracoes | Package page: `com.aggitech.aggo.migration` |
 | Multitenancy / Multitenancy | Package page: `com.aggitech.aggo.runtime.multitenancy` |
+| Reactive Notifications / Notificacoes Reativas | Package page: `com.aggitech.aggo.notify` |
 
 ## When coming from Hibernate
 
