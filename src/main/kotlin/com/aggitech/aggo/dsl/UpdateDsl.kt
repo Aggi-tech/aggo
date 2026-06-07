@@ -5,6 +5,9 @@ import com.aggitech.aggo.query.Predicate
 import com.aggitech.aggo.query.Update
 import com.aggitech.aggo.schema.Column
 import com.aggitech.aggo.schema.Table
+import kotlin.contracts.ExperimentalContracts
+import kotlin.contracts.InvocationKind
+import kotlin.contracts.contract
 
 /**
  * Builder for UPDATE queries. Obtained via [update].
@@ -32,7 +35,9 @@ class UpdateBuilder<E> internal constructor(val table: Table<E>) {
     }
 
     /** Filter rows to update. See [WhereScope] and the operators in `Operators.kt`. */
+    @OptIn(ExperimentalContracts::class)
     fun where(block: WhereScope.() -> Predicate) {
+        contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
         where = WhereScope.block()
     }
 
@@ -54,5 +59,8 @@ class UpdateBuilder<E> internal constructor(val table: Table<E>) {
  * }
  * ```
  */
-fun <E> update(table: Table<E>, block: UpdateBuilder<E>.() -> Unit): Update<E> =
-    UpdateBuilder(table).apply(block).build()
+@OptIn(ExperimentalContracts::class)
+fun <E> update(table: Table<E>, block: UpdateBuilder<E>.() -> Unit): Update<E> {
+    contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
+    return UpdateBuilder(table).apply(block).build()
+}

@@ -8,6 +8,9 @@ import com.aggitech.aggo.query.OrderDir
 import com.aggitech.aggo.query.Predicate
 import com.aggitech.aggo.schema.Column
 import com.aggitech.aggo.schema.Table
+import kotlin.contracts.ExperimentalContracts
+import kotlin.contracts.InvocationKind
+import kotlin.contracts.contract
 
 /**
  * Sort scope for `aggregate { orderBy { ... } }` blocks.
@@ -83,7 +86,9 @@ class AggregateBuilder<E> internal constructor(val table: Table<E>) {
      * where { Orders.status eq "PAID" }
      * ```
      */
+    @OptIn(ExperimentalContracts::class)
     fun where(block: WhereScope.() -> Predicate) {
+        contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
         where = WhereScope.block()
     }
 
@@ -106,7 +111,9 @@ class AggregateBuilder<E> internal constructor(val table: Table<E>) {
      * having { count(Orders.id) gt 5L }
      * ```
      */
+    @OptIn(ExperimentalContracts::class)
     fun having(block: WhereScope.() -> Predicate) {
+        contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
         having = WhereScope.block()
     }
 
@@ -118,7 +125,9 @@ class AggregateBuilder<E> internal constructor(val table: Table<E>) {
      * orderBy { total.desc() }
      * ```
      */
+    @OptIn(ExperimentalContracts::class)
     fun orderBy(block: AggOrderByScope.() -> Unit) {
+        contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
         AggOrderByScope(orderBy).block()
     }
 
@@ -154,5 +163,8 @@ class AggregateBuilder<E> internal constructor(val table: Table<E>) {
  * aggo.read { fetchAggregate(q).map { it[cnt]!! } }
  * ```
  */
-fun <E> aggregate(table: Table<E>, block: AggregateBuilder<E>.() -> Unit): AggregateSelect<E> =
-    AggregateBuilder(table).apply(block).build()
+@OptIn(ExperimentalContracts::class)
+fun <E> aggregate(table: Table<E>, block: AggregateBuilder<E>.() -> Unit): AggregateSelect<E> {
+    contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
+    return AggregateBuilder(table).apply(block).build()
+}

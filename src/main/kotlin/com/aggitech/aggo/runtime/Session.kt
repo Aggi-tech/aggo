@@ -268,6 +268,56 @@ class Session internal constructor(
         }
     }
 
+    /**
+     * Joined form of [fetchAll] — maps every [JoinedRow] into a populated domain
+     * entity through [map] in one pass. The right side is `null` on LEFT JOIN no-match.
+     *
+     * ```kotlin
+     * val orders: List<OrderWithCustomer> = fetchAll(
+     *     OrdersTable.leftJoin(CustomersTable) { OrdersTable.customerId eq CustomersTable.id },
+     * ) { order, customer -> OrderWithCustomer(order, customer) }
+     * ```
+     */
+    override suspend fun <L, R, A> fetchAll(query: JoinSelect<L, R>, map: (left: L, right: R?) -> A): List<A> =
+        flow {
+            val rendered = renderJoinSelect(query, dialect)
+            executeForResults(rendered).asResultFlow().collect { result ->
+                val mapped: Publisher<A> = result.map { row, _ ->
+                    val joined = mapJoinedRow(query, row)
+                    map(joined.left, joined.right)
+                }
+                mapped.collect { value -> emit(value) }
+            }
+        }.toList()
+
+    /**
+     * Joined form of [fetchOne] — sends `LIMIT 1`, maps the first [JoinedRow] into a
+     * populated domain entity through [map], or returns `null` when no row matches.
+     */
+    override suspend fun <L, R, A> fetchOne(query: JoinSelect<L, R>, map: (left: L, right: R?) -> A): A? =
+        flow {
+            val rendered = renderJoinSelect(query, dialect, limitOverride = 1)
+            executeForResults(rendered).asResultFlow().collect { result ->
+                val mapped: Publisher<A> = result.map { row, _ ->
+                    val joined = mapJoinedRow(query, row)
+                    map(joined.left, joined.right)
+                }
+                mapped.collect { value -> emit(value) }
+            }
+        }.toList().firstOrNull()
+
+    /** Joined, streaming form of [stream] — maps each [JoinedRow] through [map] lazily. */
+    override fun <L, R, A> stream(query: JoinSelect<L, R>, map: (left: L, right: R?) -> A): Flow<A> = flow {
+        val rendered = renderJoinSelect(query, dialect)
+        executeForResults(rendered).asResultFlow().collect { result ->
+            val mapped: Publisher<A> = result.map { row, _ ->
+                val joined = mapJoinedRow(query, row)
+                map(joined.left, joined.right)
+            }
+            mapped.collect { value -> emit(value) }
+        }
+    }
+
     // ----- PROJECTION SELECT ----------------------------------------------
 
     /**

@@ -7,6 +7,9 @@ import com.aggitech.aggo.query.ProjectionSelect
 import com.aggitech.aggo.query.Select
 import com.aggitech.aggo.schema.Column
 import com.aggitech.aggo.schema.Table
+import kotlin.contracts.ExperimentalContracts
+import kotlin.contracts.InvocationKind
+import kotlin.contracts.contract
 
 /** Scope used inside `where { … }` blocks. Predicate operators are extension functions on this scope. */
 object WhereScope
@@ -50,7 +53,9 @@ class SelectBuilder<E> internal constructor(val table: Table<E>) {
      * where { (UsersTable.active eq true) and (UsersTable.name like "%alice%") }
      * ```
      */
+    @OptIn(ExperimentalContracts::class)
     fun where(block: WhereScope.() -> Predicate) {
+        contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
         where = WhereScope.block()
     }
 
@@ -62,7 +67,9 @@ class SelectBuilder<E> internal constructor(val table: Table<E>) {
      * orderBy { UsersTable.createdAt.desc() }
      * ```
      */
+    @OptIn(ExperimentalContracts::class)
     fun orderBy(block: OrderByScope<E>.() -> Unit) {
+        contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
         OrderByScope(orderBy).block()
     }
 
@@ -130,8 +137,11 @@ class SelectBuilder<E> internal constructor(val table: Table<E>) {
  * }
  * ```
  */
-fun <E> select(table: Table<E>, block: SelectBuilder<E>.() -> Unit = {}): Select<E> =
-    SelectBuilder(table).apply(block).build()
+@OptIn(ExperimentalContracts::class)
+fun <E> select(table: Table<E>, block: SelectBuilder<E>.() -> Unit = {}): Select<E> {
+    contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
+    return SelectBuilder(table).apply(block).build()
+}
 
 /**
  * Builder for partial-column SELECT queries. Obtained via [selectProjection].
@@ -161,8 +171,17 @@ class ProjectionSelectBuilder<E> internal constructor(
     /** Add a column to the projection list. */
     operator fun <V> Column<E, V>.unaryPlus() { columns += this }
 
-    fun where(block: WhereScope.() -> Predicate) { where = WhereScope.block() }
-    fun orderBy(block: OrderByScope<E>.() -> Unit) { OrderByScope(orderBy).block() }
+    @OptIn(ExperimentalContracts::class)
+    fun where(block: WhereScope.() -> Predicate) {
+        contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
+        where = WhereScope.block()
+    }
+
+    @OptIn(ExperimentalContracts::class)
+    fun orderBy(block: OrderByScope<E>.() -> Unit) {
+        contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
+        OrderByScope(orderBy).block()
+    }
     @Deprecated(
         message = "Use Session.paginate(..., page, size) for application pagination. Keep limit only for low-level query descriptors.",
     )
@@ -202,9 +221,12 @@ class ProjectionSelectBuilder<E> internal constructor(
  * }
  * ```
  */
+@OptIn(ExperimentalContracts::class)
 fun <E> selectProjection(
     table: Table<E>,
     vararg columns: Column<E, *>,
     block: ProjectionSelectBuilder<E>.() -> Unit = {},
-): ProjectionSelect<E> =
-    ProjectionSelectBuilder(table, columns.toList()).apply(block).build()
+): ProjectionSelect<E> {
+    contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
+    return ProjectionSelectBuilder(table, columns.toList()).apply(block).build()
+}

@@ -65,6 +65,7 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldEndWith
 import java.time.Instant
 import java.time.LocalDateTime
 
@@ -349,6 +350,14 @@ class RendererTest : StringSpec({
             """ORDER BY "pets"."name" ASC, "people"."id" DESC """ +
             """LIMIT 25"""
         r.params.map { it.value } shouldBe listOf(true)
+    }
+
+    "renderJoinSelect limitOverride forces LIMIT 1 regardless of the query's own limit" {
+        val q = People.leftJoin(Pets) { People.id eq Pets.ownerId }.limit(50)
+
+        val r = renderJoinSelect(q, PostgresDialect, limitOverride = 1)
+
+        r.sql shouldEndWith "LIMIT 1"
     }
 
     "insert with explicit assignments + ValueClassCodec unwraps inline class" {

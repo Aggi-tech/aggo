@@ -100,6 +100,19 @@ class SessionBuilder internal constructor(
             }
         }
 
+    suspend fun <L, R, A> fetchAll(query: JoinSelect<L, R>, map: (left: L, right: R?) -> A): List<A> =
+        invoke { session -> session.fetchAll(query, map) }
+
+    suspend fun <L, R, A> fetchOne(query: JoinSelect<L, R>, map: (left: L, right: R?) -> A): A? =
+        invoke { session -> session.fetchOne(query, map) }
+
+    fun <L, R, A> stream(query: JoinSelect<L, R>, map: (left: L, right: R?) -> A): Flow<A> =
+        flow {
+            invoke { session ->
+                session.stream(query, map).collect { value -> emit(value) }
+            }
+        }
+
     suspend fun <E> fetchProjection(query: ProjectionSelect<E>): List<ProjectedRow> =
         invoke { session -> session.fetchProjection(query) }
 

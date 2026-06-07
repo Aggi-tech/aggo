@@ -69,8 +69,13 @@ fun renderCountSelect(query: Select<*>, dialect: SqlDialect): RenderedSql {
     return RenderedSql(sql, ctx.params)
 }
 
-fun renderJoinSelect(query: JoinSelect<*, *>, dialect: SqlDialect): RenderedSql {
+/**
+ * [limitOverride] lets [com.aggitech.aggo.runtime.Session.fetchOne] (joined form)
+ * force `LIMIT 1` regardless of the query's own limit.
+ */
+fun renderJoinSelect(query: JoinSelect<*, *>, dialect: SqlDialect, limitOverride: Int? = null): RenderedSql {
     val ctx = RenderContext(dialect)
+    val effectiveLimit = limitOverride ?: query.limit
     val leftTable = dialect.qualifyTableName(query.leftTable.name)
     val rightTable = dialect.qualifyTableName(query.rightTable.name)
     val columns = (query.leftTable.columns + query.rightTable.columns)
@@ -93,7 +98,7 @@ fun renderJoinSelect(query: JoinSelect<*, *>, dialect: SqlDialect): RenderedSql 
                 "${renderQualifiedColumn(o.column, dialect)} ${o.direction.name}"
             })
         }
-        appendPagination(dialect, query.limit, query.offset)
+        appendPagination(dialect, effectiveLimit, query.offset)
     }
 
     return RenderedSql(sql, ctx.params)

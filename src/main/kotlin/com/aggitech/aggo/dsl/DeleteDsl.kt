@@ -3,6 +3,9 @@ package com.aggitech.aggo.dsl
 import com.aggitech.aggo.query.Delete
 import com.aggitech.aggo.query.Predicate
 import com.aggitech.aggo.schema.Table
+import kotlin.contracts.ExperimentalContracts
+import kotlin.contracts.InvocationKind
+import kotlin.contracts.contract
 
 /**
  * Builder for DELETE queries. Obtained via [delete].
@@ -15,7 +18,9 @@ class DeleteBuilder<E> internal constructor(val table: Table<E>) {
     private var where: Predicate? = null
 
     /** Filter rows to delete. See [WhereScope] and the operators in `Operators.kt`. */
+    @OptIn(ExperimentalContracts::class)
     fun where(block: WhereScope.() -> Predicate) {
+        contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
         where = WhereScope.block()
     }
 
@@ -35,5 +40,8 @@ class DeleteBuilder<E> internal constructor(val table: Table<E>) {
  * aggo.tx { delete(UsersTable) }
  * ```
  */
-fun <E> delete(table: Table<E>, block: DeleteBuilder<E>.() -> Unit = {}): Delete<E> =
-    DeleteBuilder(table).apply(block).build()
+@OptIn(ExperimentalContracts::class)
+fun <E> delete(table: Table<E>, block: DeleteBuilder<E>.() -> Unit = {}): Delete<E> {
+    contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
+    return DeleteBuilder(table).apply(block).build()
+}

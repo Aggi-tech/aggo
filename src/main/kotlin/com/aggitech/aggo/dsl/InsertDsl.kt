@@ -4,6 +4,9 @@ import com.aggitech.aggo.query.Assignment
 import com.aggitech.aggo.query.Insert
 import com.aggitech.aggo.schema.Column
 import com.aggitech.aggo.schema.Table
+import kotlin.contracts.ExperimentalContracts
+import kotlin.contracts.InvocationKind
+import kotlin.contracts.contract
 
 /**
  * Builder for INSERT queries. Obtained via [insert].
@@ -50,8 +53,11 @@ class InsertBuilder<E> internal constructor(val table: Table<E>) {
  * }
  * ```
  */
-fun <E> insert(table: Table<E>, block: InsertBuilder<E>.() -> Unit): Insert<E> =
-    InsertBuilder(table).apply(block).build()
+@OptIn(ExperimentalContracts::class)
+fun <E> insert(table: Table<E>, block: InsertBuilder<E>.() -> Unit): Insert<E> {
+    contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
+    return InsertBuilder(table).apply(block).build()
+}
 
 /**
  * Builds an INSERT query from a full entity by walking the table's writable

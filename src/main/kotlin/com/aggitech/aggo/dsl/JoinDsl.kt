@@ -8,6 +8,9 @@ import com.aggitech.aggo.query.OrderDir
 import com.aggitech.aggo.query.Predicate
 import com.aggitech.aggo.schema.Column
 import com.aggitech.aggo.schema.Table
+import kotlin.contracts.ExperimentalContracts
+import kotlin.contracts.InvocationKind
+import kotlin.contracts.contract
 
 /** Scope for `orderBy { … }` inside a JOIN query. Columns from either side can be used. */
 class JoinOrderByScope internal constructor(private val sink: MutableList<JoinOrdering>) {
@@ -35,21 +38,29 @@ class JoinOrderByScope internal constructor(private val sink: MutableList<JoinOr
  * // rows[i].right → User? (null when no matching user)
  * ```
  */
+@OptIn(ExperimentalContracts::class)
 fun <L, R> Table<L>.leftJoin(
     right: Table<R>,
     on: WhereScope.() -> Predicate,
-): JoinSelect<L, R> =
-    JoinSelect(
+): JoinSelect<L, R> {
+    contract { callsInPlace(on, InvocationKind.EXACTLY_ONCE) }
+    return JoinSelect(
         leftTable = this,
         join = JoinClause(JoinType.LEFT, right, WhereScope.on()),
     )
+}
 
 /** Add a WHERE filter to a JOIN query. Can reference columns from either joined table. */
-fun <L, R> JoinSelect<L, R>.where(block: WhereScope.() -> Predicate): JoinSelect<L, R> =
-    copy(where = WhereScope.block())
+@OptIn(ExperimentalContracts::class)
+fun <L, R> JoinSelect<L, R>.where(block: WhereScope.() -> Predicate): JoinSelect<L, R> {
+    contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
+    return copy(where = WhereScope.block())
+}
 
 /** Add ORDER BY to a JOIN query. Use [JoinOrderByScope.asc] / [JoinOrderByScope.desc] on any column. */
+@OptIn(ExperimentalContracts::class)
 fun <L, R> JoinSelect<L, R>.orderBy(block: JoinOrderByScope.() -> Unit): JoinSelect<L, R> {
+    contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
     val next = orderBy.toMutableList()
     JoinOrderByScope(next).block()
     return copy(orderBy = next.toList())

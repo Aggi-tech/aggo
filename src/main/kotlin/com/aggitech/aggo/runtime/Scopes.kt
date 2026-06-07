@@ -67,6 +67,29 @@ interface SessionScope {
     suspend fun <L, R> fetchAllJoined(query: JoinSelect<L, R>): List<JoinedRow<L, R>>
     fun <L, R> streamJoined(query: JoinSelect<L, R>): Flow<JoinedRow<L, R>>
 
+    /**
+     * Joined form of [fetchAll]: executes [query] and maps each [JoinedRow] into a
+     * populated domain entity through [map]. The right side is `null` on LEFT JOIN
+     * no-match, exactly like [fetchAllJoined].
+     *
+     * ```kotlin
+     * val orders: List<OrderWithCustomer> = fetchAll(
+     *     Orders.leftJoin(Customers) { Orders.customerId eq Customers.id },
+     * ) { order, customer -> OrderWithCustomer(order, customer) }
+     * ```
+     */
+    suspend fun <L, R, A> fetchAll(query: JoinSelect<L, R>, map: (left: L, right: R?) -> A): List<A>
+
+    /**
+     * Joined form of [fetchOne]: executes [query] with `LIMIT 1` and maps the first
+     * [JoinedRow] into a populated domain entity through [map], or returns `null`
+     * when no row matches.
+     */
+    suspend fun <L, R, A> fetchOne(query: JoinSelect<L, R>, map: (left: L, right: R?) -> A): A?
+
+    /** Joined, streaming form of [fetchAll]: maps each [JoinedRow] through [map] lazily. */
+    fun <L, R, A> stream(query: JoinSelect<L, R>, map: (left: L, right: R?) -> A): Flow<A>
+
     suspend fun <E> fetchProjection(query: ProjectionSelect<E>): List<ProjectedRow>
     suspend fun <E> fetchProjection(
         table: Table<E>,
