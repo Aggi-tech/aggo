@@ -127,21 +127,27 @@ fun interval(quantity: Int, unit: IntervalUnit): Expr<String> =
  * where { Orders.placedAt.plusInterval(30, IntervalUnit.DAY) lt now() }
  * ```
  */
+@JvmName("localDateColumnPlusInterval")
 fun <E> Column<E, LocalDate>.plusInterval(quantity: Int, unit: IntervalUnit): Expr<LocalDateTime> =
     Expr(Operand.BinaryExpr(Operand.Col(this), ArithmeticOp.ADD, Operand.IntervalLiteral(quantity, unit)), LocalDateTimeCodec)
 
+@JvmName("localDateColumnMinusInterval")
 fun <E> Column<E, LocalDate>.minusInterval(quantity: Int, unit: IntervalUnit): Expr<LocalDateTime> =
     Expr(Operand.BinaryExpr(Operand.Col(this), ArithmeticOp.SUB, Operand.IntervalLiteral(quantity, unit)), LocalDateTimeCodec)
 
+@JvmName("localDateTimeColumnPlusInterval")
 fun <E> Column<E, LocalDateTime>.plusInterval(quantity: Int, unit: IntervalUnit): Expr<LocalDateTime> =
     Expr(Operand.BinaryExpr(Operand.Col(this), ArithmeticOp.ADD, Operand.IntervalLiteral(quantity, unit)), codec)
 
+@JvmName("localDateTimeColumnMinusInterval")
 fun <E> Column<E, LocalDateTime>.minusInterval(quantity: Int, unit: IntervalUnit): Expr<LocalDateTime> =
     Expr(Operand.BinaryExpr(Operand.Col(this), ArithmeticOp.SUB, Operand.IntervalLiteral(quantity, unit)), codec)
 
+@JvmName("instantColumnPlusInterval")
 fun <E> Column<E, Instant>.plusInterval(quantity: Int, unit: IntervalUnit): Expr<Instant> =
     Expr(Operand.BinaryExpr(Operand.Col(this), ArithmeticOp.ADD, Operand.IntervalLiteral(quantity, unit)), codec)
 
+@JvmName("instantColumnMinusInterval")
 fun <E> Column<E, Instant>.minusInterval(quantity: Int, unit: IntervalUnit): Expr<Instant> =
     Expr(Operand.BinaryExpr(Operand.Col(this), ArithmeticOp.SUB, Operand.IntervalLiteral(quantity, unit)), codec)
 
