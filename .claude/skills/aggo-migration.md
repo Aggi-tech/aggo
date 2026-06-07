@@ -88,13 +88,17 @@ aggo.tx { session ->
 
 ## File-based migrations (MigrationCli / AggoMigrate)
 
-Generate versioned migration files via the CLI:
+Expose a project CLI with `AggoMigrateTask`, then generate versioned migration
+files with the `migrate` command group:
 
 ```
-./gradlew aggoMigrate --tables=com.example.UsersTable,com.example.OrdersTable
+./gradlew :infrastructure:aggo --args="migrate generate --name add_orders"
+./gradlew :infrastructure:aggo --args="migrate install-cli --gradle-task :infrastructure:aggo"
+aggo migrate generate --name add_orders
+aggo migrate run
 ```
 
-Or use `MigrationCli` programmatically. Generated files are stored in `src/main/resources/db/migrations/`.
+Or use `MigrationCli` programmatically. Generated files are stored in `src/main/resources/aggo/migrations/`.
 
 Apply all pending file-based migrations at startup:
 

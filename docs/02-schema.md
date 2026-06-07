@@ -601,6 +601,64 @@ object LegacyStatusCodec : MigratableCodec<LegacyStatus> {
 }
 ```
 
+## Notification triggers — NotifyTrigger
+
+`NotifyTrigger<E>` declares a database trigger that emits a notification on a
+[`NotifyChannel`](08-notifications.md#notifychannel-and-notifycodec--typed-validated-channels)
+whenever a row event happens. It is metadata, declared **alongside** the table
+object — never inside it — mirroring the separation between `Table` and
+`ForeignKey`. `Table` keeps no DDL of its own; trigger DDL belongs to the
+migration layer, generated from this descriptor by
+[`TriggerDialect`](06-migrations.md#notification-trigger-ddl).
+
+```kotlin
+import com.aggitech.aggo.notify.NotifyChannel
+import com.aggitech.aggo.notify.StringNotifyCodec
+import com.aggitech.aggo.schema.NotifyTrigger
+import com.aggitech.aggo.schema.TriggerEvent
+
+// channels.kt
+val UserEventsChannel = NotifyChannel("user_events", StringNotifyCodec)
+
+// UsersTable.kt — declared next to the table object
+val UserInsertedTrigger = NotifyTrigger(
+    name       = "trg_notify_user_inserted",
+    table      = UsersTable,
+    channel    = UserEventsChannel,
+    events     = setOf(TriggerEvent.Insert),
+    payloadSql = "NEW.id",
+)
+```
+
+| Property | Meaning |
+|----------|---------|
+| `name` | Trigger identifier — validated like table/column names |
+| `table` | The `Table<E>` the trigger fires on |
+| `channel` | The `NotifyChannel<*>` the notification is published to |
+| `timing` | `TriggerTiming.Before` or `After` (default `After`) |
+| `events` | Non-empty `Set<TriggerEvent>` — `Insert`, `Update`, `Delete` |
+| `payloadSql` | A literal SQL expression referencing `NEW`/`OLD` |
+| `forEachRow` | Row-level vs statement-level firing (default row-level) |
+
+`payloadSql` is **embedded verbatim** into the generated trigger body — e.g.
+`"NEW.id"`, `"NEW.id::text"`, `"NEW.email || ':' || NEW.id"`. There is no
+domain mapping and no reflection inside a trigger: the expression must be valid
+SQL for the target dialect, and that validity is the integrator's
+responsibility, exactly like `Checks`' custom expression strings.
+
+A trigger that listens to more than one event (e.g.
+`{Insert, Update, Delete}`) cannot hard-code `NEW` or `OLD` — `NEW` is empty on
+`DELETE` and `OLD` is empty on `INSERT`/`UPDATE`. `TriggerDialect` rewrites
+whichever row image you wrote into the one the firing operation actually
+populates, so a single `payloadSql` such as `"NEW.id"` works correctly across
+all declared events. See the
+[Migration Generation guide](06-migrations.md#notification-trigger-ddl) for the
+generated DDL and how it plugs into `migrationSchema`/`migrationPlan`.
+
+For the consumer side — `Flow<Notification<P>>`, `AggoListener`,
+`OutboxListener`, `Session.notify` — see the
+[Reactive Notifications guide](08-notifications.md).
+
 ## Aggo vs Hibernate schema mapping
 
 | Hibernate | Aggo | Why it matters |
@@ -681,6 +739,38 @@ de migracoes consegue emitir o DDL do tipo antes das tabelas que dependem dele.
 e outros helpers colocam regras no banco. Isso e diferente de validacao apenas
 na aplicacao: a regra tambem protege inserts feitos por jobs, scripts e outros
 servicos.
+
+### Triggers de notificacao — NotifyTrigger
+
+`NotifyTrigger<E>` declara um trigger de banco que emite uma notificacao em um
+`NotifyChannel` quando ocorre um evento de linha (`Insert`, `Update`,
+`Delete`). E metadado, declarado **ao lado** do objeto da tabela — nunca dentro
+dele — preservando o mesmo invariante de `Table` sem DDL proprio: a geracao do
+DDL do trigger pertence a camada de migracao (`TriggerDialect`).
+
+```kotlin
+val UserEventsChannel = NotifyChannel("user_events", StringNotifyCodec)
+
+val UserInsertedTrigger = NotifyTrigger(
+    name       = "trg_notify_user_inserted",
+    table      = UsersTable,
+    channel    = UserEventsChannel,
+    events     = setOf(TriggerEvent.Insert),
+    payloadSql = "NEW.id",
+)
+```
+
+`payloadSql` e uma expressao SQL literal (`"NEW.id"`, `"NEW.id::text"`, ...)
+embutida no corpo do trigger gerado — sem mapeamento de dominio, sem reflexao.
+Para triggers com mais de um evento, `TriggerDialect` reescreve `NEW`/`OLD`
+para a referencia que cada operacao realmente popula (DELETE nao tem `NEW`,
+INSERT/UPDATE nao tem `OLD`), entao a mesma expressao funciona em todos os
+eventos declarados. Veja a
+[secao de migracoes](06-migrations.md#ddl-de-triggers-de-notificacao) para o
+DDL gerado e o
+[guia de Notificacoes Reativas](08-notifications.md#notificacoes-reativas-pt)
+para o lado consumidor (`Flow<Notification<P>>`, `AggoListener`,
+`OutboxListener`, `Session.notify`).
 
 ### Comparacao com Hibernate
 

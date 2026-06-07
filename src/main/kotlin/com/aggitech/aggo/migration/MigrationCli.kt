@@ -10,6 +10,7 @@ import kotlinx.coroutines.reactive.collect
 import kotlinx.coroutines.runBlocking
 import org.reactivestreams.Publisher
 import java.nio.file.Files
+import java.nio.file.Paths
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.exists
 import kotlin.io.path.writeText
@@ -20,12 +21,13 @@ import kotlin.io.path.writeText
  * Each subcommand is invoked as the first argv element when running the task:
  *
  * ```
- * mvn compile exec:java -Dexec.args="generate -Daggo.name=add_orders"
- * mvn compile exec:java -Dexec.args="apply"
- * mvn compile exec:java -Dexec.args="status"
- * mvn compile exec:java -Dexec.args="dry-run"
- * mvn compile exec:java -Dexec.args="drop --force"
- * mvn compile exec:java -Dexec.args="reset --force"
+ * mvn compile exec:java -Dexec.args="migrate generate --name add_orders"
+ * mvn compile exec:java -Dexec.args="migrate run"
+ * mvn compile exec:java -Dexec.args="migrate status"
+ * mvn compile exec:java -Dexec.args="migrate dry-run"
+ * mvn compile exec:java -Dexec.args="migrate install-cli --runner maven"
+ * mvn compile exec:java -Dexec.args="migrate drop --force"
+ * mvn compile exec:java -Dexec.args="migrate reset --force"
  * ```
  *
  * Destructive subcommands (`drop`, `reset`) require `--force` when `AGGO_ENV`
@@ -41,35 +43,42 @@ import kotlin.io.path.writeText
 internal object MigrationCli {
 
     fun dispatch(task: AggoMigrateTask, args: Array<String>) {
-        val subcommand = args.firstOrNull()
+        val cliArgs = args.stripMigrateGroup()
+        val subcommand = cliArgs.firstOrNull()
             ?.takeIf { KNOWN_SUBCOMMANDS.contains(it) }
             ?: "generate"
 
         // Strip the subcommand from argv if it matched a known one; otherwise
         // leave argv intact so the legacy "first arg is the migration name"
         // contract still works.
-        val rest = if (subcommand == args.firstOrNull()) args.drop(1).toTypedArray() else args
+        val rest = if (subcommand == cliArgs.firstOrNull()) cliArgs.drop(1).toTypedArray() else cliArgs
 
         when (subcommand) {
-            "generate" -> generate(task, rest)
-            "status"   -> status(task)
-            "apply"    -> apply(task)
-            "dry-run"  -> dryRun(task)
-            "drop"     -> drop(task, rest)
-            "reset"    -> reset(task, rest)
+            "generate", "gen" -> generate(task, rest)
+            "status"          -> status(task)
+            "run", "apply", "up" -> apply(task)
+            "dry-run", "sql"  -> dryRun(task)
+            "install-cli"      -> installCli(rest)
+            "drop"            -> drop(task, rest)
+            "reset"           -> reset(task, rest)
             "help", "-h", "--help" -> printHelp()
             else       -> error("unreachable: unknown subcommand '$subcommand'")
         }
     }
 
     private val KNOWN_SUBCOMMANDS = setOf(
-        "generate", "status", "apply", "dry-run", "drop", "reset", "help", "-h", "--help",
+        "generate", "gen", "status", "run", "apply", "up", "dry-run", "sql",
+        "drop", "reset", "help", "-h", "--help",
+        "install-cli",
     )
+
+    private fun Array<String>.stripMigrateGroup(): Array<String> =
+        if (firstOrNull() == "migrate") drop(1).toTypedArray() else this
 
     // ----- generate -------------------------------------------------------
 
     private fun generate(task: AggoMigrateTask, args: Array<String>) {
-        val name = args.firstOrNull()?.takeIf { it.isNotBlank() }
+        val name = migrationNameFrom(args)
             ?: System.getProperty("aggo.name")?.takeIf { it.isNotBlank() }
 
         // DB is the authoritative snapshot source. Sync to the local file so that
@@ -101,6 +110,91 @@ internal object MigrationCli {
             migrationsDir = task.migrationsDir,
             migrationName = name,
         )
+    }
+
+    private fun migrationNameFrom(args: Array<String>): String? {
+        var positional: String? = null
+        var i = 0
+        while (i < args.size) {
+            val arg = args[i]
+            when {
+                arg == "--name" || arg == "-n" -> {
+                    val value = args.getOrNull(i + 1)
+                        ?.takeIf { it.isNotBlank() && !it.startsWith("-") }
+                        ?: error("$arg requires a migration name")
+                    return value
+                }
+                arg.startsWith("--name=") -> {
+                    return arg.substringAfter("=").takeIf { it.isNotBlank() }
+                        ?: error("--name requires a migration name")
+                }
+                arg.isBlank() -> Unit
+                positional == null -> positional = arg
+            }
+            i++
+        }
+        return positional
+    }
+
+    // ----- install-cli ----------------------------------------------------
+
+    private fun installCli(args: Array<String>) {
+        val request = unixCliInstallRequestFrom(args)
+        val target = writeUnixCliLauncher(request)
+        println("Installed Aggo CLI: $target")
+        println("Run: ${request.commandName} migrate generate --name add_orders")
+        println("If the command is not found, add ${request.installDir} to PATH.")
+    }
+
+    private fun unixCliInstallRequestFrom(args: Array<String>): UnixCliInstallRequest {
+        var commandName = "aggo"
+        var installDir = defaultUnixInstallDir()
+        var projectDir = Paths.get("").toAbsolutePath()
+        var runner: UnixCliRunner? = null
+        var gradleTask = ":aggoCliRun"
+
+        var i = 0
+        while (i < args.size) {
+            val arg = args[i]
+            when {
+                arg == "--command" -> commandName = optionValue(args, i, arg).also { i++ }
+                arg.startsWith("--command=") -> commandName = valueAfterEquals(arg, "--command")
+                arg == "--dir" -> installDir = Paths.get(optionValue(args, i, arg)).also { i++ }
+                arg.startsWith("--dir=") -> installDir = Paths.get(valueAfterEquals(arg, "--dir"))
+                arg == "--project-dir" -> projectDir = Paths.get(optionValue(args, i, arg)).also { i++ }
+                arg.startsWith("--project-dir=") -> projectDir = Paths.get(valueAfterEquals(arg, "--project-dir"))
+                arg == "--runner" -> runner = unixRunner(optionValue(args, i, arg)).also { i++ }
+                arg.startsWith("--runner=") -> runner = unixRunner(valueAfterEquals(arg, "--runner"))
+                arg == "--gradle-task" -> gradleTask = optionValue(args, i, arg).also { i++ }
+                arg.startsWith("--gradle-task=") -> gradleTask = valueAfterEquals(arg, "--gradle-task")
+                arg.isBlank() -> Unit
+                else -> error("Unknown install-cli option: $arg")
+            }
+            i++
+        }
+
+        return UnixCliInstallRequest(
+            commandName = commandName,
+            installDir = installDir,
+            projectDir = projectDir,
+            runner = runner ?: defaultUnixCliRunner(projectDir),
+            gradleTask = gradleTask,
+        )
+    }
+
+    private fun optionValue(args: Array<String>, index: Int, option: String): String =
+        args.getOrNull(index + 1)
+            ?.takeIf { it.isNotBlank() && !it.startsWith("-") }
+            ?: error("$option requires a value")
+
+    private fun valueAfterEquals(arg: String, option: String): String =
+        arg.substringAfter("=").takeIf { it.isNotBlank() }
+            ?: error("$option requires a value")
+
+    private fun unixRunner(value: String): UnixCliRunner = when (value.lowercase()) {
+        "gradle" -> UnixCliRunner.GRADLE
+        "maven"  -> UnixCliRunner.MAVEN
+        else     -> error("--runner must be gradle or maven, got: $value")
     }
 
     // ----- status ---------------------------------------------------------
@@ -216,17 +310,26 @@ internal object MigrationCli {
     private fun printHelp() {
         println(
             """
-            Aggo migration task — subcommands:
+            Aggo migration CLI:
 
-              generate [name]     Generate a new migration from current Table descriptors.
-                                  Optional positional name (or -Daggo.name=) appended to the
-                                  timestamp version.
-              apply               Run pending migrations against the configured database.
+              aggo migrate generate [name]
+              aggo migrate generate --name add_orders
+              aggo migrate run
+              aggo migrate status
+              aggo migrate dry-run
+              aggo migrate install-cli
+              aggo migrate drop [--force]
+              aggo migrate reset [--force]
+              aggo migrate help
+
+            Subcommands:
+              generate, gen       Generate a new migration from current Table descriptors.
+              run, apply, up      Run pending migrations against the configured database.
               status              List applied vs pending migrations.
-              dry-run             Print pending migration SQL without applying.
-              drop [--force]      Drop every declared table plus aggo_schema_versions.
-                                  Requires --force when AGGO_ENV=prod.
-              reset [--force]     drop followed by apply. Same prod guard as drop.
+              dry-run, sql        Print pending migration SQL without applying.
+              install-cli          Install a Unix launcher, usually ~/.local/bin/aggo.
+              drop                Drop every declared table plus aggo_schema_versions.
+              reset               drop followed by run.
               help                Show this text.
 
             Database configuration (apply, status, drop, reset):
