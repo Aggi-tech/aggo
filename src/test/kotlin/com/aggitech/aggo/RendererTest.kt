@@ -6,14 +6,19 @@ import com.aggitech.aggo.dialect.PostgresDialect
 import com.aggitech.aggo.dialect.forSchema
 import com.aggitech.aggo.dsl.aggregate
 import com.aggitech.aggo.dsl.and
+import com.aggitech.aggo.dsl.asExpr
 import com.aggitech.aggo.dsl.avg
 import com.aggitech.aggo.dsl.between
 import com.aggitech.aggo.dsl.coalesce
 import com.aggitech.aggo.dsl.count
 import com.aggitech.aggo.dsl.countDistinct
 import com.aggitech.aggo.dsl.countStar
+import com.aggitech.aggo.dsl.dateTrunc
 import com.aggitech.aggo.dsl.delete
 import com.aggitech.aggo.dsl.eq
+import com.aggitech.aggo.dsl.extract
+import com.aggitech.aggo.dsl.function
+import com.aggitech.aggo.dsl.functionDistinct
 import com.aggitech.aggo.dsl.gt
 import com.aggitech.aggo.dsl.gte
 import com.aggitech.aggo.dsl.inList
@@ -24,22 +29,30 @@ import com.aggitech.aggo.dsl.leftJoin
 import com.aggitech.aggo.dsl.limit
 import com.aggitech.aggo.dsl.like
 import com.aggitech.aggo.dsl.lower
+import com.aggitech.aggo.dsl.lt
 import com.aggitech.aggo.dsl.minus
+import com.aggitech.aggo.dsl.minusInterval
 import com.aggitech.aggo.dsl.matchesRegex
 import com.aggitech.aggo.dsl.matchesRegexIgnoreCase
 import com.aggitech.aggo.dsl.notIlike
 import com.aggitech.aggo.dsl.notMatchesRegex
+import com.aggitech.aggo.dsl.now
 import com.aggitech.aggo.dsl.orderBy
 import com.aggitech.aggo.dsl.or
 import com.aggitech.aggo.dsl.plus
+import com.aggitech.aggo.dsl.plusInterval
 import com.aggitech.aggo.dsl.select
 import com.aggitech.aggo.dsl.sum
+import com.aggitech.aggo.dsl.timeBucket
 import com.aggitech.aggo.dsl.times
 import com.aggitech.aggo.dsl.update
 import com.aggitech.aggo.dsl.upper
 import com.aggitech.aggo.dsl.where
+import com.aggitech.aggo.dsl.year
 import com.aggitech.aggo.migration.migrationPlan
 import com.aggitech.aggo.migration.migrationSchema
+import com.aggitech.aggo.query.DatePart
+import com.aggitech.aggo.query.IntervalUnit
 import com.aggitech.aggo.render.renderAggregateSelect
 import com.aggitech.aggo.render.renderCountSelect
 import com.aggitech.aggo.render.renderDelete
@@ -52,6 +65,7 @@ import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
 import java.time.Instant
+import java.time.LocalDateTime
 
 class RendererTest : StringSpec({
 
@@ -91,6 +105,23 @@ class RendererTest : StringSpec({
             """WHERE "people"."active" = ${'$'}1 """ +
             """ORDER BY "people"."created_at" DESC, "people"."name" ASC """ +
             """LIMIT 10 OFFSET 20"""
+    }
+
+    "select.distinct renders SELECT DISTINCT" {
+        val q = select(People) {
+            distinct()
+            where { People.active eq true }
+        }
+        val r = renderSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT DISTINCT "id", "email", "name", "active", "created_at" FROM "people" """ +
+            """WHERE "people"."active" = ${'$'}1"""
+    }
+
+    "select without distinct() omits DISTINCT" {
+        val q = select(People)
+        val r = renderSelect(q, PostgresDialect)
+        r.sql shouldBe """SELECT "id", "email", "name", "active", "created_at" FROM "people""""
     }
 
     "count select reuses filter and ignores order limit offset" {
@@ -438,6 +469,124 @@ class RendererTest : StringSpec({
             """SELECT "id", "email", "name", "active", "created_at" FROM "people" """ +
             """WHERE COALESCE("people"."name", ${'$'}1) = ${'$'}2"""
         r.params.map { it.value } shouldBe listOf("unknown", "unknown")
+    }
+
+    // ── Date/time functions & dialect routing ───────────────────────────────
+
+    "extract renders EXTRACT(field FROM column) in WHERE" {
+        val q = select(People) { where { extract(DatePart.YEAR, People.createdAt) eq 2026.0 } }
+        val r = renderSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" """ +
+            """WHERE EXTRACT(YEAR FROM "people"."created_at") = ${'$'}1"""
+        r.params.map { it.value } shouldBe listOf(2026.0)
+    }
+
+    "year shorthand renders the same EXTRACT(YEAR FROM ...) as extract(DatePart.YEAR, ...)" {
+        val q = select(People) { where { year(People.createdAt) gt 2000.0 } }
+        val r = renderSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" """ +
+            """WHERE EXTRACT(YEAR FROM "people"."created_at") > ${'$'}1"""
+    }
+
+    "dateTrunc renders dialect-specific SQL for Postgres, MySQL and Oracle" {
+        val day = LocalDateTime.of(2026, 1, 1, 0, 0)
+
+        val pg = renderSelect(select(People) { where { dateTrunc(DatePart.DAY, People.createdAt) eq day } }, PostgresDialect)
+        pg.sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" """ +
+            """WHERE date_trunc('day', "people"."created_at") = ${'$'}1"""
+
+        val mysql = renderSelect(select(People) { where { dateTrunc(DatePart.DAY, People.createdAt) eq day } }, MySqlDialect)
+        mysql.sql shouldBe
+            "SELECT `id`, `email`, `name`, `active`, `created_at` FROM `people` " +
+            "WHERE CAST(DATE_FORMAT(`people`.`created_at`, '%Y-%m-%d 00:00:00') AS DATETIME) = ?"
+
+        val oracle = renderSelect(select(People) { where { dateTrunc(DatePart.DAY, People.createdAt) eq day } }, OracleDialect)
+        oracle.sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" """ +
+            """WHERE TRUNC("people"."created_at", 'DD') = :1"""
+    }
+
+    "interval / plusInterval / minusInterval render dialect-specific INTERVAL syntax with bound quantity" {
+        val pg = renderSelect(
+            select(People) { where { People.createdAt.plusInterval(30, IntervalUnit.DAY) lt now() } },
+            PostgresDialect,
+        )
+        pg.sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" """ +
+            """WHERE ("people"."created_at" + (${'$'}1 * INTERVAL '1 day')) < now()"""
+        pg.params.map { it.value } shouldBe listOf(30)
+
+        val mysql = renderSelect(
+            select(People) { where { People.createdAt.minusInterval(2, IntervalUnit.HOUR) lt now() } },
+            MySqlDialect,
+        )
+        mysql.sql shouldBe
+            "SELECT `id`, `email`, `name`, `active`, `created_at` FROM `people` " +
+            "WHERE (`people`.`created_at` - INTERVAL ? HOUR) < now()"
+
+        val oracle = renderSelect(
+            select(People) { where { People.createdAt.plusInterval(1, IntervalUnit.MONTH) lt now() } },
+            OracleDialect,
+        )
+        oracle.sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" """ +
+            """WHERE ("people"."created_at" + NUMTOYMINTERVAL(:1, 'MONTH')) < now()"""
+    }
+
+    "now() compares against a column via cross-expression operators" {
+        val q = select(People) { where { People.createdAt lt now() } }
+        val r = renderSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" """ +
+            """WHERE "people"."created_at" < now()"""
+        r.params shouldHaveSize 0
+    }
+
+    "timeBucket renders TimescaleDB time_bucket(width, column) as a projection" {
+        val bucket = timeBucket(1, IntervalUnit.HOUR, People.createdAt) `as` "bucket"
+        val q = aggregate(People) { project(bucket) }
+        val r = renderAggregateSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT time_bucket((${'$'}1 * INTERVAL '1 hour'), "people"."created_at") AS "bucket" FROM "people""""
+        r.params.map { it.value } shouldBe listOf(1)
+    }
+
+    "function and functionDistinct render generic FUNC(args) calls" {
+        val firstName = function("first", People.fullName.asExpr(), People.createdAt.asExpr(), codec = People.fullName.codec) `as` "first_name"
+        val q1 = aggregate(People) { project(firstName) }
+        renderAggregateSelect(q1, PostgresDialect).sql shouldBe
+            """SELECT first("people"."name", "people"."created_at") AS "first_name" FROM "people""""
+
+        val uniqueNames = functionDistinct("array_agg", People.fullName.asExpr(), codec = People.fullName.codec) `as` "names"
+        val q2 = aggregate(People) { project(uniqueNames) }
+        renderAggregateSelect(q2, PostgresDialect).sql shouldBe
+            """SELECT array_agg(DISTINCT "people"."name") AS "names" FROM "people""""
+    }
+
+    // ── Table aliases ────────────────────────────────────────────────────────
+
+    "select with alias renders FROM table AS alias and qualifies WHERE/ORDER BY" {
+        val q = select(People) {
+            alias("p")
+            where { People.active eq true }
+            orderBy { People.createdAt.desc() }
+        }
+        val r = renderSelect(q, PostgresDialect)
+        r.sql shouldBe
+            """SELECT "id", "email", "name", "active", "created_at" FROM "people" AS "p" """ +
+            """WHERE "p"."active" = ${'$'}1 ORDER BY "p"."created_at" DESC"""
+    }
+
+    "count select honours table alias too" {
+        val q = select(People) {
+            alias("p")
+            where { People.active eq true }
+        }
+        val r = renderCountSelect(q, PostgresDialect)
+        r.sql shouldBe """SELECT COUNT(*) FROM "people" AS "p" WHERE "p"."active" = ${'$'}1"""
     }
 
     // ── Aggregate SELECT ────────────────────────────────────────────────────

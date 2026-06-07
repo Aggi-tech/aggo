@@ -1,5 +1,6 @@
 package com.aggitech.aggo.query
 
+import com.aggitech.aggo.dialect.requireValidIdentifier
 import com.aggitech.aggo.schema.Codec
 import com.aggitech.aggo.schema.Column
 import com.aggitech.aggo.schema.Table
@@ -87,10 +88,13 @@ data class Select<E>(
     val orderBy: List<Ordering<E, *>> = emptyList(),
     val limit: Int? = null,
     val offset: Int? = null,
+    val distinct: Boolean = false,
+    val alias: String? = null,
 ) : Query<E> {
     init {
         if (limit != null) require(limit in 0..MAX_LIMIT) { "limit out of range: $limit" }
         if (offset != null) require(offset >= 0) { "offset must be >= 0: $offset" }
+        if (alias != null) requireValidIdentifier(alias)
     }
 
     companion object { const val MAX_LIMIT = 10_000_000 }

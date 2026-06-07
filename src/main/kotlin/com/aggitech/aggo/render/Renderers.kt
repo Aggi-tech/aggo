@@ -21,30 +21,30 @@ import com.aggitech.aggo.schema.Column
  * force `LIMIT 1` without allocating a `Select.copy(limit = 1)`.
  */
 fun renderSelect(query: Select<*>, dialect: SqlDialect, limitOverride: Int? = null): RenderedSql {
-    val ctx = RenderContext(dialect)
-    val table = dialect.qualifyTableName(query.table.name)
+    val aliases = query.alias?.let { mapOf(query.table.name to it) } ?: emptyMap()
+    val ctx = RenderContext(dialect, aliases)
+    val tableRef = renderTableRef(query.table.name, query.alias, dialect)
 
     val columns = query.table.columns
         .joinToString(", ") { dialect.quoteIdentifier(it.name) }
         .ifEmpty { "*" }
 
-    // P-1: estimate ~64 base + 16 chars per column + 24 per param slot.
-    val estimate = 64 + columns.length + query.table.columns.size * 16
+    // P-1: estimate ~64 base + 16 chars per column + 24 per param slot (+9 for "DISTINCT ").
+    val estimate = 64 + columns.length + query.table.columns.size * 16 + (if (query.distinct) 9 else 0)
     val effectiveLimit = limitOverride ?: query.limit
 
     val sql = buildString(estimate) {
-        append("SELECT ").append(columns)
-        append(" FROM ").append(table)
+        append("SELECT ")
+        if (query.distinct) append("DISTINCT ")
+        append(columns)
+        append(" FROM ").append(tableRef)
 
         query.where?.let {
             append(" WHERE ").append(PredicateRenderer.render(it, ctx))
         }
         if (query.orderBy.isNotEmpty()) {
             append(" ORDER BY ")
-            append(query.orderBy.joinToString(", ") { o ->
-                val col = "${dialect.qualifyTableName(o.column.table.name)}.${dialect.quoteIdentifier(o.column.name)}"
-                "$col ${o.direction.name}"
-            })
+            append(query.orderBy.joinToString(", ") { o -> "${ctx.qualifyColumn(o.column)} ${o.direction.name}" })
         }
         appendPagination(dialect, effectiveLimit, query.offset)
     }
@@ -54,12 +54,13 @@ fun renderSelect(query: Select<*>, dialect: SqlDialect, limitOverride: Int? = nu
 
 /** Render `SELECT COUNT(*)` for the filtered row set of a [Select]. */
 fun renderCountSelect(query: Select<*>, dialect: SqlDialect): RenderedSql {
-    val ctx = RenderContext(dialect)
-    val table = dialect.qualifyTableName(query.table.name)
+    val aliases = query.alias?.let { mapOf(query.table.name to it) } ?: emptyMap()
+    val ctx = RenderContext(dialect, aliases)
+    val tableRef = renderTableRef(query.table.name, query.alias, dialect)
 
-    val sql = buildString(48 + table.length) {
+    val sql = buildString(48 + tableRef.length) {
         append("SELECT COUNT(*)")
-        append(" FROM ").append(table)
+        append(" FROM ").append(tableRef)
         query.where?.let {
             append(" WHERE ").append(PredicateRenderer.render(it, ctx))
         }
@@ -246,6 +247,12 @@ private fun <V> bindAssignment(a: Assignment<*, V>, ctx: RenderContext): String 
 
 private fun renderQualifiedColumn(column: Column<*, *>, dialect: SqlDialect): String =
     "${dialect.qualifyTableName(column.table.name)}.${dialect.quoteIdentifier(column.name)}"
+
+/** Renders a FROM-clause table reference, optionally aliased: `"people"` or `"people" AS "p"`. */
+private fun renderTableRef(tableName: String, alias: String?, dialect: SqlDialect): String {
+    val qualified = dialect.qualifyTableName(tableName)
+    return if (alias != null) "$qualified AS ${dialect.quoteIdentifier(alias)}" else qualified
+}
 
 private fun StringBuilder.appendPagination(dialect: SqlDialect, limit: Int?, offset: Int?) {
     val pagination = dialect.renderPagination(limit, offset)
